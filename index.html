@@ -1055,12 +1055,10 @@ function setField(f,v){
   if(!cleared && v==='VIN DISCREPANCY' && (f==='monroney' || f==='gatepass')){
     const label = f==='monroney' ? 'Monroney' : 'Gatepass';
     toast('Photograph the ' + label + ' and the VIN plate', 4200);
-    // Straight to the camera. Falls back to the picker only where the browser
-    // will not hand us a stream at all.
-    setTimeout(()=>{
-      if(cameraSupported()) openCamera();
-      else { const el=$('file'); if(el) el.click(); }
-    }, 450);
+    // Straight to the camera — renderForm() above has already redrawn, so the
+    // photo section exists to drop the shot into.
+    if(cameraSupported()) openCamera();
+    else { const el=$('file'); if(el) el.click(); }
   }
 }
 function setText(f,v){ S.current[f]=v; saveDraft(S.current.vin, S.current); }
@@ -1129,24 +1127,60 @@ function markMissing(){
 /** Running inside Telegram rather than a browser? */
 function inTelegram(){ return typeof tg !== 'undefined' && !!tg; }
 
+
 /**
- * Telegram's WebView swaps every file input for its own picker and ignores
- * capture, so the camera is unreachable from in here. Instead: tell the server
- * which VIN we are on, then hand over to the chat, where Telegram's own camera
- * is one tap away. The bot files whatever gets sent.
+ * The whole screen for a van that was not in its bay: what we know from the
+ * yard sheet, and one way out if it turns up after all.
  */
-function shootInChat(){
-  const vin = S.current && S.current.vin;
-  if(!vin) return;
-  toast('Opening the chat — send your photos there', 3000);
-  google.script.run
-    .withSuccessHandler(r=>{
-      const link = (r && r.botLink) || (window.__BOT_LINK || '');
-      if(!link){ toast('Bot link unknown — check TG_APP_LINK', 5000); return; }
-      try { tg.openTelegramLink(link); } catch(e){ toast('Could not open the chat: '+e.message, 4000); }
-    })
-    .withFailureHandler(e=>toast(e.message, 5000))
-    .apiExpectPhotos(vin);
+function renderMissing(r){
+  $('formView').innerHTML = `
+    \x3cbutton class="back" onclick="backToList()">‹ Back\x3c/button>
+
+    \x3cdiv class="grp">
+      \x3cdiv class="vin" style="font-size:20px">${esc(r.vin)}\x3c/div>
+      \x3cdiv class="tags">${tagsFor(r)}\x3c/div>
+      \x3cdiv class="facts" style="margin-top:11px">
+        \x3cdiv class="fact" style="flex:1">\x3cdiv class="k">LOAD ID\x3c/div>
+          \x3cdiv class="v ${r.loadId?'':'none'}">${esc(r.loadId||'— none —')}\x3c/div>\x3c/div>
+        \x3cdiv class="fact" style="flex:1">\x3cdiv class="k">BAY ON SHEET\x3c/div>
+          \x3cdiv class="v ${r.baySheet?'mono':'none'}">${esc(bayDisplay(r.baySheet)||'—')}\x3c/div>\x3c/div>
+      \x3c/div>
+      \x3cdiv style="margin-top:10px">
+        ${r.description?'\x3cdiv class="kv">Model \x3cb>'+esc(r.description)+'\x3c/b>\x3c/div>':''}
+        ${r.inspectedBy?'\x3cdiv class="kv">Marked missing by \x3cb>'+esc(r.inspectedBy)+'\x3c/b> '+esc(r.inspectedAt||'')+'\x3c/div>':''}
+      \x3c/div>
+    \x3c/div>
+
+    \x3cdiv class="grp" style="text-align:center;padding:22px 14px">
+      \x3cdiv style="font-size:34px;line-height:1">🔍\x3c/div>
+      \x3cdiv style="font-weight:700;font-size:17px;margin-top:8px">Not found in the yard\x3c/div>
+      \x3cdiv class="bayhint" style="margin-top:8px">
+        This van is not at its bay, so there is nothing to inspect.
+        It is recorded and reported — no checklist needed.
+      \x3c/div>
+    \x3c/div>
+
+    \x3cbutton class="addbtn" onclick="foundIt()">The van is here — reopen the inspection\x3c/button>`;
+
+  $('bottom').innerHTML =
+    '\x3cbutton class="btn pri" style="flex:1" onclick="backToList()">Done\x3c/button>';
+}
+
+/** It turned up. Put it back into the queue with the checklist. */
+function foundIt(){
+  const r = S.current;
+  toast('Reopening ' + r.vin.slice(-6) + '…', 2000);
+  mutate({
+    fn:'apiSave', vin:r.vin,
+    args:[Object.assign({}, r, {complete:false, actor: me()})],
+    ok:(server, queued)=>{
+      const fresh = queued ? Object.assign({}, r, {status:'IN PROGRESS'}) : server;
+      if(queued) patchLocal(fresh.vin, {status:'IN PROGRESS'});
+      S.current = fresh;
+      renderForm();
+    },
+    fail:e=>toast('Could not reopen: '+e.message, 4000)
+  });
 }
 
 /** Damage, or a VIN discrepancy, both need a picture. */
@@ -1166,6 +1200,10 @@ function photoWhy(r){
 function renderForm(){
   if(S.evalMode && !S.unlocked) return renderEvalSummary();
   const r=S.current;
+  // Nothing to inspect on a van that is not in its bay. Asking for documents
+  // and a roof type on a van nobody can see is a form nobody can honestly
+  // fill in — so the checklist goes away entirely.
+  if(r.status==='MISSING' && !S.unlocked) return renderMissing(r);
   const dmgStyle = v => v==='YES'?'bad':'no';
   const docStyle = v => v==='YES'?'ok':'bad';
 
@@ -1232,8 +1270,7 @@ function renderForm(){
         ${cameraSupported() ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>' : ''}
         \x3cbutton class="addbtn" style="margin-top:8px"
                 onclick="document.getElementById('file').click()">🖼 Add from gallery\x3c/button>
-        ${inTelegram() ? '\x3cbutton class="addbtn" style="margin-top:8px" ' +
-            'onclick="shootInChat()">📸 Take photos in chat\x3c/button>' : ''}
+
       \x3c/div>
     \x3c/div>`;
 
@@ -1345,6 +1382,11 @@ function resizeImage(file, maxPx, quality){
 /* ---------- save ---------- */
 function save(complete){
   const r=S.current;
+  // A van nobody could find has no checklist to validate.
+  if(complete && r.status==='MISSING'){
+    toast('…'+r.vin.slice(-6)+' is already recorded as MISSING', 2600);
+    return backToList();
+  }
   if(complete){
     const missing=[];
     if(!(r.bayActual||'').trim()) missing.push('full bay location');
