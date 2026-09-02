@@ -303,8 +303,20 @@ if (tg) {
   if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
   try { tg.setHeaderColor('#0f1115'); tg.setBackgroundColor('#0f1115'); } catch (e) {}
 
-  // Deep link: t.me/<bot>/<app>?startapp=load_201032  /  ...?startapp=vin_W1Z...
-  const sp = (tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '';
+  /* Deep link: t.me/<bot>/<app>?startapp=load_201032  /  ...?startapp=vin_W1Z...
+     Read it from BOTH places. initDataUnsafe.start_param is the documented
+     one, but it is only filled reliably on a cold launch — tap a link while
+     the app is still open in the background and Telegram resumes the old
+     instance with a stale or empty value. The URL that Telegram actually
+     loaded carries tgWebAppStartParam, and that is always the current one. */
+  const fromUrl = () => {
+    try {
+      const src = (location.hash || '').slice(1) + '&' + (location.search || '').slice(1);
+      const m = src.match(/(?:^|&)tgWebAppStartParam=([^&]*)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch (e) { return ''; }
+  };
+  const sp = fromUrl() || (tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '';
   if (/^load[_-]/i.test(sp))     window.__TG_LOAD = sp.replace(/^load[_-]/i, '');
   else if (/^vin[_-]/i.test(sp)) window.__TG_VIN  = sp.replace(/^vin[_-]/i, '').toUpperCase();
 }
@@ -960,13 +972,13 @@ function openVin(vin){
   }
 
   google.script.run.withSuccessHandler(r=>{
-    if(!r){ if(!cached){ toast('VIN not found'); showForm(false); } return; }
+    if(!r){ if(!cached){ toast('VIN ' + vin + ' is not in the sheet', 5000); showForm(false); } return; }
     if(S.current && S.current.vin !== vin) return;      // moved on already
     if(cached && JSON.stringify(r) === JSON.stringify(cached)) return;
     patchLocal(vin, r);
     if(!S.unlocked) paintVin(r);                        // don't stamp on an edit in progress
   }).withFailureHandler(e=>{
-    if(!cached){ toast(e.message); showForm(false); }
+    if(!cached){ toast('Could not open ' + vin + ': ' + e.message, 5000); showForm(false); }
   }).apiGet(vin);
 }
 
@@ -1018,7 +1030,12 @@ function setField(f,v){
   if(!cleared && v==='VIN DISCREPANCY' && (f==='monroney' || f==='gatepass')){
     const label = f==='monroney' ? 'Monroney' : 'Gatepass';
     toast('Photograph the ' + label + ' and the VIN plate', 4200);
-    setTimeout(()=>{ const el=$('file'); if(el) el.click(); }, 400);
+    // Straight to the camera. Falls back to the picker only where the browser
+    // will not hand us a stream at all.
+    setTimeout(()=>{
+      if(cameraSupported()) openCamera();
+      else { const el=$('file'); if(el) el.click(); }
+    }, 450);
   }
 }
 function setText(f,v){ S.current[f]=v; saveDraft(S.current.vin, S.current); }
