@@ -255,7 +255,6 @@
   </div>
   <div class="tabs" id="tabs">
     <button class="tab on" data-v="vins">VINs <span id="cP"></span></button>
-    <button class="tab" data-v="loads">Loads <span id="cL"></span></button>
     <button class="tab" data-v="eval">Eval <span id="cD"></span></button>
   </div>
 </header>
@@ -389,7 +388,7 @@ const LANE_MAX = 51;
 const POS_MAX  = 99;
 
 let S = {
-  view:'vins', sort:'bay', q:'', bayFree:false, homeYard:'', expandedLoad:'',
+  view:'vins', sort:'bay', q:'', bayFree:false, homeYard:'',
   evalMode:false, unlocked:false, showApproved:false, nameKind:'',
   rows:[], loads:[], counts:{}, current:null, pendingPhotos:0, confirmMissing:false,
   // Sort-by-load in the VIN tab opens every load. This holds the ones he has
@@ -542,7 +541,8 @@ function clearDraft(v){ try{ localStorage.removeItem(dk(v)); }catch(e){} }
 function refresh(){
   $('refresh').innerHTML='<span class="spin"></span>';
   google.script.run.withSuccessHandler(d=>{
-    S.rows=d.rows; S.loads=d.loads; S.counts=d.counts; S.homeYard=d.homeYard||'';
+    d = d || {};
+    S.rows=d.rows||[]; S.loads=d.loads||[]; S.counts=d.counts||{}; S.homeYard=d.homeYard||'';
     cacheSave(d);
     if(d.botLink) window.__BOT_LINK = d.botLink;
     paintCounts(d);
@@ -561,9 +561,11 @@ function refresh(){
 }
 
 function paintCounts(d){
-  $('cP').textContent='('+d.counts.pending+')';
-  $('cL').textContent='('+d.loads.filter(l=>l.pending>0).length+')';
-  $('cD').textContent='('+(d.counts.evalOpen + d.counts.evalRequested)+')';
+  // Never let an odd response take the whole screen down — a half-painted
+  // header is survivable, a thrown refresh leaves him on a spinner.
+  const c = (d && d.counts) || {};
+  $('cP').textContent='('+(c.pending||0)+')';
+  $('cD').textContent='('+((c.evalOpen||0) + (c.evalRequested||0))+')';
 }
 
 /** Show the yard from the last good load. Returns false if there isn't one. */
@@ -579,16 +581,15 @@ function hydrateFromCache(){
 }
 
 function render(){
-  if(S.view==='loads') renderLoads();
-  else if(S.view==='eval') renderEval();
+  if(S.view==='eval') renderEval();
   else renderVins();
 }
 
 /* ================= LOADS =================
-   One load card, used by two screens: the Loads tab (one load open at a
-   time, the overview) and the VIN tab on "Sort by Load ID" (every load
-   open, because that is the list he walks). Only the open/shut rule and
-   the search filter differ. */
+   Loads live inside the VIN list, on "Sort by Load ID" — the load card with
+   its progress, its VINs and its sign-off button, in the list he is already
+   standing in. There is no separate Loads tab: it showed the same data one
+   fold further away. */
 
 /** Same fields the VIN list searches, so a load and its VINs agree. */
 function vinMatch(r, q){
@@ -601,9 +602,8 @@ function loadVins(loadId, q){
   return S.rows.filter(r=>r.loadId===loadId && !hidden(r) && vinMatch(r,q)).sort(cmpBay);
 }
 
-/** Open by default in the VIN tab; one at a time in the Loads tab. */
+/** Open unless he folded it shut himself. */
 function loadOpen(l){
-  if(S.view!=='vins') return S.expandedLoad===l.loadId;
   const c = S.collapsed[l.loadId];
   if(c !== undefined) return !c;                    // he folded it himself; leave it
   if(S.q.trim()) return true;                       // searching: show the hits
@@ -663,23 +663,9 @@ function loadCard(l){
   </div>`;
 }
 
-function renderLoads(){
-  const open = S.loads.filter(l=>l.pending>0);
-  const finished = S.loads.filter(l=>l.pending===0);
-  if(!open.length && !finished.length){
-    $('listView').innerHTML='<div class="empty">No loads yet.<br>They appear here when a staging request arrives.</div>';
-    return;
-  }
-  $('listView').innerHTML =
-    (open.length ? open.map(loadCard).join('') : '<div class="empty">Nothing pending. Good.</div>') +
-    (finished.length ? secHead('FULLY INSPECTED', finished.length)
-                       + finished.map(loadCard).join('') : '');
-}
-
 /**
- * The VIN tab on "Sort by Load ID": the load cards themselves, already open,
- * so the whole load — progress, the VINs, the sign-off button — is in the
- * list he is standing in rather than a tab away.
+ * "Sort by Load ID": the load cards themselves, already open, so the whole
+ * load — progress, the VINs, the sign-off button — is right there.
  */
 function renderLoadGroups(){
   const q = S.q.trim().toUpperCase();
@@ -705,14 +691,9 @@ function renderLoadGroups(){
 }
 
 function toggleLoad(id){
-  if(S.view==='vins'){
-    const l = S.loads.filter(function(x){ return x.loadId===id; })[0];
-    S.collapsed[id] = (l ? loadOpen(l) : true);     // whatever it is now, flip it
-    renderVins();
-  } else {
-    S.expandedLoad = (S.expandedLoad===id) ? '' : id;
-    renderLoads();
-  }
+  const l = S.loads.filter(function(x){ return x.loadId===id; })[0];
+  S.collapsed[id] = (l ? loadOpen(l) : true);       // whatever it is now, flip it
+  renderVins();
 }
 
 /** Tapping a VIN inside a load opens that VIN's inspection directly. */
@@ -934,7 +915,7 @@ function cancelEdits(){
  */
 function saveEdits(){
   const r = S.current;
-  if(S.pendingPhotos > 0){ toast('Wait — '+S.pendingPhotos+' photo(s) still uploading'); return; }
+  // Photos do not hold this up — they are queued ahead of it and land first.
 
   const full = !!((r.bayActual||'').trim() && r.monroney && r.gatepass
                   && r.vanType && r.lifted && r.roof && r.ac && r.damage);
@@ -1118,13 +1099,18 @@ function setField(f,v){
   saveDraft(S.current.vin, S.current);
   renderForm();
 
-  // A VIN discrepancy is a claim about paperwork. It needs evidence, so the
-  // camera opens straight away rather than relying on someone remembering.
+  /* A VIN discrepancy is a claim about paperwork. It needs evidence, so the
+     camera opens straight away rather than relying on someone remembering.
+     Damage is NOT handled here — there he picks camera or gallery himself.
+
+     Either way the shot goes into the outbox like every other photo and is
+     sent in the background: he closes the camera, finishes the checklist and
+     signs without waiting for anything. */
   if(!cleared && v==='VIN DISCREPANCY' && (f==='monroney' || f==='gatepass')){
     const label = f==='monroney' ? 'Monroney' : 'Gatepass';
     toast('Photograph the ' + label + ' and the VIN plate', 4200);
-    // Straight to the camera — renderForm() above has already redrawn, so the
-    // photo section exists to drop the shot into.
+    // renderForm() above has already redrawn, so the photo section exists to
+    // drop the shot into.
     if(cameraSupported()) openCamera();
     else { const el=$('file'); if(el) el.click(); }
   }
@@ -1362,68 +1348,87 @@ window.__P3 = 1;
 /* ---------- photos ---------- */
 function handleFiles(files){ [].slice.call(files).forEach(uploadOne); $('file').value=''; }
 
+/* ==================================================================
+   PHOTOS NEVER BLOCK ANYTHING
+
+   A photo goes straight into the outbox and is sent in the background.
+   Nothing on screen waits for it: the tile appears immediately, the
+   inspection can be signed, and the supervisor can walk to the next van.
+
+   The outbox is oldest-first and one at a time, so a van's photos are
+   always sent before its inspection — which means the alert the group
+   gets still arrives with the pictures attached, however long the phone
+   spent out of signal.
+   ================================================================== */
+
 function uploadOne(file){
-  const grid=$('photoGrid');
-  const ph=document.createElement('div'); ph.className='ph';
-  ph.innerHTML='\x3cdiv style="display:grid;place-items:center;height:100%">\x3cspan class="spin">\x3c/span>\x3c/div>';
-  grid.appendChild(ph);
-  S.pendingPhotos++;
+  const vin = S.current.vin;
+  const ph  = newTile();
+  resizeImage(file, 1600, 0.78)
+    .then(dataUrl => sendPhoto_(dataUrl, file.name || 'photo.jpg', ph, vin))
+    .catch(()=>{ ph.remove(); toast('Could not read image'); });
+}
 
-  // Smaller when it may have to sit on the phone: a queued photo has to fit
-  // in the few megabytes a browser gives a page, alongside everything else.
-  const offline = navigator.onLine === false;
-  const maxPx   = offline ? 1280 : 1600;
-  const quality = offline ? 0.6  : 0.78;
-  const vin     = S.current.vin;
-
-  resizeImage(file, maxPx, quality)
-    .then(dataUrl => sendPhoto_(dataUrl, file.name || 'photo.jpg', ph, () => uploadOne(file)))
-    .catch(()=>{ S.pendingPhotos--; ph.remove(); toast('Could not read image'); });
+/** The placeholder tile a photo lives in until it reaches Drive. */
+function newTile(){
+  const grid = $('photoGrid');
+  const ph = document.createElement('div');
+  ph.className = 'ph';
+  ph.innerHTML = '\x3cdiv style="display:grid;place-items:center;height:100%">\x3cspan class="spin">\x3c/span>\x3c/div>';
+  if(grid) grid.appendChild(ph);
+  return ph;
 }
 
 /**
- * Everything after "we have the image": the offline cap, the upload, and
- * swapping the placeholder for the real thumbnail.
- *
- * Shared by the file picker and the in-app camera, so a photo behaves the
- * same however it was taken.
+ * Queue one photo. Shared by the file picker and the in-app camera, so a
+ * photo behaves the same however it was taken.
  */
-function sendPhoto_(dataUrl, name, ph, retry){
-  const offline = navigator.onLine === false;
-  const vin = S.current.vin;
-  {
-    ph.innerHTML='\x3cimg src="'+dataUrl+'" style="opacity:.45">';
+function sendPhoto_(dataUrl, name, ph, vin){
+  vin = vin || (S.current && S.current.vin);
+  if(!vin){ ph.remove(); return; }
 
-    if(offline && queuedPhotoCount() >= MAX_PHOTOS){
-      S.pendingPhotos--;
-      ph.remove();
-      toast('Only '+MAX_PHOTOS+' photos can wait on the phone. Take the rest once you have signal.', 5000);
-      return;
-    }
+  if(queuedPhotoCount() >= MAX_PHOTOS){
+    ph.remove();
+    toast('The phone is holding ' + MAX_PHOTOS + ' photos already. Get back in ' +
+          'signal to send them, then take the rest.', 6000);
+    return;
+  }
 
-    mutate({
-      fn:'apiUploadPhoto', args:[vin, dataUrl, name], vin:vin,
-      ok:(res, queued)=>{
-        S.pendingPhotos--;
-        if(queued){
-          ph.outerHTML='\x3cdiv class="ph">\x3cimg src="'+dataUrl+'" style="opacity:.5">\x3c/div>';
-          toast('Photo saved on the phone — it will upload when you have signal.', 3600);
-          return;
-        }
-        S.current.photoCount=res.count;
-        S.current.photoLinks=(S.current.photoLinks||[]).concat([res.url]);
-        if(document.body.contains(ph)){
-          ph.outerHTML='\x3ca href="'+res.url+'" target="_blank">\x3cimg src="'+thumb(res.url)+'">\x3c/a>';
-        } else renderForm();
-        toast('Photo saved ('+res.count+')');
-      },
-      fail:e=>{
-        S.pendingPhotos--;
-        ph.innerHTML='\x3cdiv style="color:#f87171;font-size:11px;padding:6px;text-align:center">Failed\x3cbr>tap to retry\x3c/div>';
-        ph.onclick=()=>{ ph.remove(); retry && retry(); };
-        toast('Upload failed: '+e.message, 4000);
-      }
+  ph.innerHTML = '\x3cimg src="' + dataUrl + '" style="opacity:.45">';
+  // A name of our own making, so a photo re-sent after a timeout is
+  // recognised on the server as the one already filed rather than a second copy.
+  const unique = vin + '_' + Date.now() + '_' +
+                 Math.random().toString(36).slice(2, 7) + '.jpg';
+
+  enqueuePhoto(vin, dataUrl, unique,
+    smaller => { ph.innerHTML = '\x3cimg src="' + smaller + '" style="opacity:.45">'; },
+    id => {
+      if(!id){ ph.remove(); return; }
+      ph.dataset.q = id;               // photoLanded finds it again by this
+      ph.title = 'Waiting to send';
+      flushOutbox();                   // start now if there is signal
     });
+}
+
+/**
+ * The flusher calls this when a queued photo has actually reached Drive
+ * (or failed for good, with res === null). The tile may be long gone — he
+ * may have signed the van and walked on — which is fine.
+ */
+function photoLanded(entry, res){
+  const ph = document.querySelector('[data-q="' + entry.id + '"]');
+  if(!res){
+    if(ph) ph.innerHTML =
+      '\x3cdiv style="color:#f87171;font-size:11px;padding:6px;text-align:center">Not saved\x3cbr>take it again\x3c/div>';
+    return;
+  }
+  if(S.current && S.current.vin === entry.vin){
+    S.current.photoCount = res.count;
+    S.current.photoLinks = (S.current.photoLinks || []).concat([res.url]);
+  }
+  if(ph){
+    ph.outerHTML = '\x3ca href="' + res.url + '" target="_blank">\x3cimg src="' +
+                   thumb(res.url) + '">\x3c/a>';
   }
 }
 
@@ -1431,19 +1436,24 @@ function sendPhoto_(dataUrl, name, ph, retry){
 function resizeImage(file, maxPx, quality){
   return new Promise((resolve,reject)=>{
     const fr=new FileReader(); fr.onerror=reject;
-    fr.onload=()=>{
-      const img=new Image(); img.onerror=reject;
-      img.onload=()=>{
-        let w=img.width, h=img.height;
-        const s=Math.min(1, maxPx/Math.max(w,h));
-        w=Math.round(w*s); h=Math.round(h*s);
-        const c=document.createElement('canvas'); c.width=w; c.height=h;
-        c.getContext('2d').drawImage(img,0,0,w,h);
-        resolve(c.toDataURL('image/jpeg', quality));
-      };
-      img.src=fr.result;
-    };
+    fr.onload=()=>{ shrinkDataUrl(fr.result, maxPx, quality).then(resolve, reject); };
     fr.readAsDataURL(file);
+  });
+}
+
+/** Re-encode an image that is already a data URL. */
+function shrinkDataUrl(dataUrl, maxPx, quality){
+  return new Promise((resolve,reject)=>{
+    const img=new Image(); img.onerror=reject;
+    img.onload=()=>{
+      let w=img.width, h=img.height;
+      const s=Math.min(1, maxPx/Math.max(w,h));
+      w=Math.round(w*s); h=Math.round(h*s);
+      const c=document.createElement('canvas'); c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.src=dataUrl;
   });
 }
 
@@ -1465,8 +1475,10 @@ function save(complete){
     if(!r.ac) missing.push('AC');
     if(!r.damage) missing.push('damage');
     if(missing.length){ toast('Still needed: '+missing.join(', '), 3500); return; }
-    if(S.pendingPhotos>0){ toast('Wait — '+S.pendingPhotos+' photo(s) still uploading'); return; }
+    // Photos no longer hold this up. They are queued ahead of this save, so
+    // they reach Drive first and the group's alert still carries them.
   }
+  const waiting = outbox().filter(e => e.fn==='apiUploadPhoto' && e.vin===r.vin).length;
   const btn = complete ? $('doneBtn') : null;
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving'; }
 
@@ -1484,9 +1496,14 @@ function save(complete){
       S.current=fresh;
       if(complete){
         clearDraft(fresh.vin);
-        toast(queued ? '…'+fresh.vin.slice(-6)+' complete — waiting for signal'
-                     : 'Saved — …'+fresh.vin.slice(-6)+' complete', queued?3600:2200);
-        setTimeout(backToList,650);
+        const tail = '…'+fresh.vin.slice(-6);
+        let msg;
+        if(waiting) msg = tail+' complete · '+waiting+' photo'+(waiting===1?'':'s')+
+                          ' still to send — you can carry on';
+        else if(queued) msg = tail+' complete — waiting for signal';
+        else msg = 'Saved — '+tail+' complete';
+        toast(msg, (waiting||queued) ? 4000 : 2200);
+        setTimeout(backToList,420);
       } else {
         saveDraft(fresh.vin, fresh);
         toast(queued ? 'Draft kept on the phone' : 'Draft saved');
@@ -1588,12 +1605,7 @@ function takeShot(){
   c.width  = Math.round(v.videoWidth  * s);
   c.height = Math.round(v.videoHeight * s);
   c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-  const dataUrl = c.toDataURL('image/jpeg', navigator.onLine === false ? 0.6 : 0.78);
-
-  if(navigator.onLine === false && queuedPhotoCount() >= MAX_PHOTOS){
-    toast('Only ' + MAX_PHOTOS + ' photos can wait on the phone.', 4500);
-    return;
-  }
+  const dataUrl = c.toDataURL('image/jpeg', 0.78);
 
   // A thumbnail in the strip so he can see what he has, without leaving.
   const strip = document.getElementById('camstrip');
@@ -1603,14 +1615,8 @@ function takeShot(){
   strip.appendChild(t);
   strip.scrollLeft = strip.scrollWidth;
 
-  // Same path as a picked file: placeholder in the form, upload, thumbnail.
-  const grid = $('photoGrid');
-  const ph = document.createElement('div');
-  ph.className = 'ph';
-  ph.innerHTML = '\x3cdiv style="display:grid;place-items:center;height:100%">\x3cspan class="spin">\x3c/span>\x3c/div>';
-  if(grid) grid.appendChild(ph);
-  S.pendingPhotos++;
-  sendPhoto_(dataUrl, 'camera.jpg', ph, null);
+  // Same path as a picked file: tile in the form, queued, sent in the background.
+  sendPhoto_(dataUrl, 'camera.jpg', newTile(), S.current.vin);
 }
 
 function closeCamera(quiet){
@@ -1647,7 +1653,17 @@ window.__P4 = 1;
 
 const CACHE_KEY  = 'yard.cache';
 const OUTBOX_KEY = 'yard.outbox';
-const MAX_PHOTOS = 5;          // queued photos, not photos per VIN
+const MAX_PHOTOS = 15;         // queued photos, not photos per VIN
+
+/**
+ * How long to wait for the server before giving up and queueing instead.
+ *
+ * navigator.onLine only knows whether the phone thinks it has a connection.
+ * A yard dead zone shows a bar of signal and reports online, so the request
+ * simply hangs — which is what had supervisors staring at a spinner. Stop
+ * waiting, put it in the outbox, let him carry on.
+ */
+const TIMEOUT_MS = { apiUploadPhoto: 30000, apiCompleteLoad: 25000, _default: 15000 };
 
 /* ---------- storage that never throws ---------- */
 function lsGet(k, def){
@@ -1683,17 +1699,57 @@ function outboxHas(vin){ return outbox().some(e => e.vin === vin); }
 
 function queuedPhotoCount(){ return outbox().filter(e => e.fn === 'apiUploadPhoto').length; }
 
+/** @return {string} the queue id, or '' if the phone had no room. */
 function enqueue(entry){
   const q = outbox();
-  entry.id = 'q' + Date.now() + Math.random().toString(36).slice(2,7);
+  entry.id = entry.id || ('q' + Date.now() + Math.random().toString(36).slice(2,7));
   entry.ts = Date.now();
   q.push(entry);
   if(!outboxSet(q)){
-    toast("Phone storage is full — that one wasn't saved. Get back in signal and try again.", 5000);
-    return false;
+    if(entry.fn !== 'apiUploadPhoto'){
+      toast("Phone storage is full — that one wasn't saved. Get back in signal and try again.", 5000);
+    }
+    return '';                              // photos retry smaller, see enqueuePhoto
   }
   paintSync();
-  return true;
+  return entry.id;
+}
+
+/**
+ * A photo into the outbox, shrinking it if the phone has no room.
+ *
+ * A browser gives a page a few megabytes, not a few hundred, so on a long
+ * walk through a dead zone the queue fills. Rather than refusing the photo —
+ * the one thing that must not be lost — take it at lower quality.
+ *
+ * @param {function(string)} onShrunk  told the data URL actually stored, so
+ *                                     the thumbnail on screen matches
+ * @param {function(string)} done      the queue id, or '' if it could not be kept
+ */
+function enqueuePhoto(vin, dataUrl, name, onShrunk, done){
+  const steps = [null, {px:1200, q:0.6}, {px:900, q:0.45}];   // null = as taken
+
+  const attempt = (i, url) => {
+    const id = enqueue({ fn:'apiUploadPhoto', args:[vin, url, name], vin:vin });
+    if(id){ if(i > 0) onShrunk && onShrunk(url); return done(id); }
+
+    if(i + 1 >= steps.length){
+      toast('This phone has no room left for photos. Get back in signal, then take it again.', 6000);
+      return done('');
+    }
+    const s = steps[i + 1];
+    shrinkDataUrl(url, s.px, s.q).then(smaller => attempt(i + 1, smaller))
+                                 .catch(() => attempt(steps.length, url));
+  };
+  attempt(0, dataUrl);
+}
+
+/**
+ * Called by the flusher the moment a queued photo actually reaches Drive,
+ * so the tile on screen can stop being a placeholder. Defined in IndexJs4.
+ */
+function photoLandedSafe(entry, res){
+  try { if(typeof photoLanded === 'function') photoLanded(entry, res); } catch(e){}
 }
 function dequeue(id){
   outboxSet(outbox().filter(e => e.id !== id));
@@ -1709,69 +1765,151 @@ function isNetworkProblem(e){
          m.indexOf('internal error') !== -1;
 }
 
+/* ==================================================================
+   ONE PATH FOR EVERYTHING
+
+   There is no "send it now" and no "send it later". Every change the
+   supervisor makes goes into the outbox, and the outbox is the only
+   thing that ever talks to the server — oldest first, one at a time.
+
+   That ordering is the whole design. A van's photos are queued before
+   its inspection, so they reach Drive first, so the alert the group
+   gets always carries the full set. Not because we checked the signal
+   — because it cannot happen in any other order.
+
+   The only thing signal decides is which sentence he reads. If the
+   change lands within a moment he is told it saved; if not he is told
+   it is held on the phone and he carries on. Same machinery either way.
+   ================================================================== */
+
+/* How long to let a change try before telling him it is held on the phone.
+   Long enough that a normal save reads "Saved" rather than "waiting", short
+   enough that he is never standing at a van watching a spinner. */
+const GRACE_MS = 1200;
+
+const ACKS = {};               // queue id -> the screen waiting on that entry
+
+/** Answer the screen once, whichever outcome gets there first. */
+function ack_(id, how, a, b){
+  const h = ACKS[id];
+  if(!h) return;
+  delete ACKS[id];
+  try { h[how] && h[how](a, b); } catch(e){}
+}
+
 /**
- * One mutating server call, with the outbox behind it.
+ * One change, queued.
  *
  *   spec.fn     server function name
  *   spec.args   arguments
  *   spec.vin    what it is about, for the "waiting" tag
- *   spec.ok     (result, wasQueued) on success OR on queue
+ *   spec.ok     (result, stillWaiting) — result is null while it waits
  *   spec.fail   (err) only for real server errors, never for lost signal
  */
 function mutate(spec){
-  const queueIt = () => {
-    if(enqueue({ fn: spec.fn, args: spec.args, vin: spec.vin || '' })){
-      spec.ok && spec.ok(null, true);
-    } else {
-      spec.fail && spec.fail(new Error('Could not save on the phone either'));
-    }
-  };
+  const id = enqueue({ fn: spec.fn, args: spec.args, vin: spec.vin || '' });
+  if(!id){
+    spec.fail && spec.fail(new Error('Could not save on the phone either'));
+    return;
+  }
+  ACKS[id] = { ok: spec.ok, fail: spec.fail };
 
-  if(navigator.onLine === false) return queueIt();
-
-  const run = google.script.run
-    .withSuccessHandler(r => { spec.ok && spec.ok(r, false); flushOutbox(); })
-    .withFailureHandler(e => {
-      if(isNetworkProblem(e)) queueIt();
-      else spec.fail && spec.fail(e);
-    });
-  run[spec.fn].apply(run, spec.args);
+  if(navigator.onLine === false){
+    ack_(id, 'ok', null, true);            // no point pretending; say so now
+  } else {
+    setTimeout(() => ack_(id, 'ok', null, true), GRACE_MS);
+  }
+  flushOutbox();
 }
 
 /* ---------- sending what is waiting ---------- */
 let flushing = false;
+let flushSince = 0;
+let flushCancel = null;      // abandons the attempt in flight
+
+/**
+ * Give up on whatever is in flight and start again.
+ *
+ * He walks out of the dead zone with a request still hanging. Waiting out
+ * its timeout before trying again wastes the signal he has just found, so
+ * the moment the phone says it is back online we drop the old attempt and
+ * start the queue over.
+ *
+ * Abandoning is safe: if the original lands anyway, the server recognises a
+ * re-sent photo by its name and refuses to file it twice, and a repeated
+ * save writes the same values it already holds.
+ */
+function restartFlush(){
+  const c = flushCancel;
+  flushCancel = null;
+  flushing = false;
+  if(c) c();
+  flushOutbox();
+}
+
+/** In flight far longer than its own timeout — the phone has lost the call. */
+function flushStuck(){
+  return flushing && flushSince && (Date.now() - flushSince > 45000);
+}
 
 function flushOutbox(){
+  if(flushStuck()) return restartFlush();
   if(flushing) return;
   const q = outbox();
   if(!q.length){ paintSync(); return; }
   if(navigator.onLine === false){ paintSync(); return; }
 
   flushing = true;
+  flushSince = Date.now();
   paintSync();
 
+  // Oldest first, and one at a time. That ordering is what keeps a van's
+  // photos ahead of its inspection: by the time the save reaches the server
+  // the pictures are already in Drive, so the group's alert carries them.
   const entry = q[0];
+  let settled = false;
+  const finish = (fn) => { if(settled) return; settled = true; clearTimeout(timer); fn(); };
+
   const done = (sent) => {
     flushing = false;
+    flushCancel = null;
     if(sent){
       dequeue(entry.id);
       if(outboxCount()) flushOutbox();       // keep going
       else { toast('Everything is saved.', 2600); refresh(); }
     } else {
-      paintSync();                            // still offline, try again later
+      paintSync();
+      // Try again soon rather than waiting for the slow heartbeat — he may
+      // only be in signal for the few seconds it takes to drive past.
+      setTimeout(() => { if(navigator.onLine !== false) flushOutbox(); }, 8000);
     }
   };
 
+  const timer = setTimeout(() => finish(() => done(false)),
+                           TIMEOUT_MS[entry.fn] || TIMEOUT_MS._default);
+  flushCancel = () => finish(() => { flushing = false; paintSync(); });
+
   const run = google.script.run
-    .withSuccessHandler(() => done(true))
-    .withFailureHandler(e => {
+    .withSuccessHandler(res => finish(() => {
+      if(entry.fn === 'apiUploadPhoto') photoLandedSafe(entry, res);
+      ack_(entry.id, 'ok', res, false);        // "saved", if anything is still listening
+      done(true);
+    }))
+    .withFailureHandler(e => finish(() => {
       // A real server error would repeat forever. Drop it, and say so.
       if(isNetworkProblem(e)) return done(false);
       dequeue(entry.id);
       flushing = false;
-      toast('One change could not be saved: ' + e.message, 5000);
+      ack_(entry.id, 'fail', e);
+      if(entry.fn === 'apiUploadPhoto'){
+        photoLandedSafe(entry, null);
+        toast('A photo for …' + String(entry.vin).slice(-6) + ' could not be saved: ' +
+              e.message + ' — take it again.', 6000);
+      } else {
+        toast('One change could not be saved: ' + e.message, 5000);
+      }
       if(outboxCount()) flushOutbox();
-    });
+    }));
   run[entry.fn].apply(run, entry.args);
 }
 
@@ -1796,14 +1934,20 @@ function paintSync(){
   const lift = (bar && !bar.classList.contains('hide')) ? bar.offsetHeight : 0;
   el.style.bottom = lift + 'px';
 
+  // Name what is waiting. "3 photos" is reassuring in a way "3 changes" is not.
+  const photos = queuedPhotoCount();
+  const other  = n - photos;
+  const bits = [];
+  if(photos) bits.push(photos + (photos === 1 ? ' photo' : ' photos'));
+  if(other)  bits.push(other + (other === 1 ? ' inspection' : ' inspections'));
+
   const off = navigator.onLine === false;
   el.style.background = off ? '#78350f' : '#1e3a8a';
   el.style.color = '#fff';
   el.innerHTML =
-    '<span>' + (off ? 'No signal — ' : 'Sending — ') + n +
-    (n === 1 ? ' change' : ' changes') + ' saved on this phone</span>' +
-    (off ? '' : '<span class="spin"></span>');
-  el.onclick = () => { if(navigator.onLine !== false) flushOutbox(); };
+    '<span>' + (off ? 'No signal — ' : 'Sending — ') + bits.join(' + ') +
+    ' held on this phone</span>' + (off ? '' : '<span class="spin"></span>');
+  el.onclick = () => { if(navigator.onLine !== false) restartFlush(); };
 }
 
 /* ---------- keep the list in step while offline ---------- */
@@ -1821,9 +1965,13 @@ function cachedRow(vin){
   return null;
 }
 
-window.addEventListener('online',  () => { paintSync(); flushOutbox(); });
+// Back in signal: drop whatever was hanging and use the window while it lasts.
+window.addEventListener('online',  () => { paintSync(); restartFlush(); });
 window.addEventListener('offline', paintSync);
-setInterval(() => { if(outboxCount() && navigator.onLine !== false) flushOutbox(); }, 20000);
+setInterval(() => {
+  if(!outboxCount() || navigator.onLine === false) return;
+  if(flushStuck()) restartFlush(); else flushOutbox();
+}, 20000);
 
 window.__P5 = 1;
 </script>
@@ -1872,7 +2020,9 @@ window.__P5 = 1;
   paintSync();
   flushOutbox();
 
-  if (INITIAL_LOAD) S.q = INITIAL_LOAD;
+  // "Open load" from the bot: group the VIN list by load and filter to that
+  // one, which is where a load now lives.
+  if (INITIAL_LOAD) { S.sort = 'load'; S.q = INITIAL_LOAD; }
   refresh();
   if (INITIAL_VIN) openVin(INITIAL_VIN);
 })();
