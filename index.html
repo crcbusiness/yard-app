@@ -322,6 +322,12 @@ if (tg) {
   const sp = fromUrl() || (tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '';
   if (/^load[_-]/i.test(sp))     window.__TG_LOAD = sp.replace(/^load[_-]/i, '');
   else if (/^vin[_-]/i.test(sp)) window.__TG_VIN  = sp.replace(/^vin[_-]/i, '').toUpperCase();
+  // An 'Approve Eval' / 'Send Eval Email' button: open that van AND raise
+  // the dialog it was pressed for.
+  else if (/^(sup|oem|eml)[_-]/i.test(sp)) {
+    window.__TG_ACT = sp.slice(0, 3).toLowerCase();
+    window.__TG_VIN = sp.slice(4).toUpperCase();
+  }
 }
 
 let ROLES = { view: true, inspect: true, eval: true };
@@ -382,6 +388,7 @@ let OPT = window.__TG_OPT || {};
 const INITIAL_VIN  = window.__TG_VIN  || "";
 const INITIAL_LOAD = window.__TG_LOAD || "";
 const SERVER_USER  = "";
+const INITIAL_ACT  = window.__TG_ACT  || "";
 </script>
 
 <script>
@@ -390,7 +397,8 @@ const POS_MAX  = 99;
 
 let S = {
   view:'vins', sort:'bay', q:'', bayFree:false, homeYard:'',
-  evalMode:false, unlocked:false, showApproved:false, nameKind:'',
+  evalMode:false, unlocked:false, showApproved:false, nameKind:'', nameRole:'',
+  pendingAction:'',            // set by an 'Approve Eval' button in Telegram
   rows:[], loads:[], counts:{}, current:null, pendingPhotos:0, confirmMissing:false,
   // Sort-by-load in the VIN tab opens every load. This holds the ones he has
   // folded shut, so a load stays closed while he works the rest of the list.
@@ -996,16 +1004,29 @@ function saveEdits(){
   });
 }
 
-/* ---- one prompt, two questions ---- */
-function askName(kind){
+/* ---- one prompt, several questions ----
+   `role` is set when the request came from a button in Telegram, so the sheet
+   records not just who cleared the van but in what capacity. Either role
+   clears it: the van leaves the pending sections of Eval either way. */
+const ROLE_LABEL = { sup:'Yard Supervisor', oem:'OEM Coordinator' };
+
+function askName(kind, role){
   S.nameKind = kind;
-  $('mtitle').textContent = kind==='APPROVED' ? 'Approve for shipping' : 'Request evaluation';
-  $('mlabel').textContent = kind==='APPROVED' ? 'Who approved?' : 'Who requested the evaluation?';
+  S.nameRole = role || '';
+  const rl = ROLE_LABEL[S.nameRole] || '';
+  $('mtitle').textContent = kind==='APPROVED'
+    ? (rl ? 'Approve — ' + rl : 'Approve for shipping')
+    : 'Request evaluation';
+  $('mlabel').textContent = kind==='APPROVED'
+    ? (rl ? 'Your name (' + rl + ')' : 'Who approved?')
+    : 'Who requested the evaluation?';
   $('approveGo').textContent = kind==='APPROVED' ? 'Approve' : 'Confirm request';
   $('mvin').textContent = S.current.vin;
   const i = $('approver');
-  i.value = '';
-  $('approveGo').disabled = true;
+  // Inside Telegram the name is already known and verified, so he confirms
+  // rather than types. In a browser it is still a blank field.
+  i.value = (S.nameRole && me()) ? me() : '';
+  $('approveGo').disabled = !i.value.trim();
   $('modal').classList.remove('hide');
   setTimeout(()=>i.focus(), 60);
 }
@@ -1013,8 +1034,12 @@ function checkApprover(){ $('approveGo').disabled = !$('approver').value.trim();
 function closeApprove(){ $('modal').classList.add('hide'); }
 
 function confirmName(){
-  const name = $('approver').value.trim();
+  let name = $('approver').value.trim();
   if(!name) return;
+  if(!S.current || !S.current.vin){ toast('No VIN is open', 3000); return; }
+  // "Anton Balta (Yard Supervisor)" — the capacity travels with the name, so
+  // the sheet says who cleared it and on whose authority without a new column.
+  if(S.nameRole && ROLE_LABEL[S.nameRole]) name += ' · ' + ROLE_LABEL[S.nameRole];
   const vin = S.current.vin, kind = S.nameKind;
   const go = $('approveGo');
   const label = go.textContent;
@@ -1066,7 +1091,10 @@ function openVin(vin){
   }
 
   google.script.run.withSuccessHandler(r=>{
-    if(!r){ if(!cached){ toast('VIN ' + vin + ' is not in the sheet', 5000); showForm(false); } return; }
+    if(!r || !r.vin){                       // no row, or one that came back malformed
+      if(!cached){ toast('VIN ' + vin + ' is not in the sheet', 5000); showForm(false); }
+      return;
+    }
     if(S.current && S.current.vin !== vin) return;      // moved on already
     if(cached && JSON.stringify(r) === JSON.stringify(cached)) return;
     patchLocal(vin, r);
@@ -1118,6 +1146,23 @@ function paintVinNow(r){
   S.unlocked = false;
   showForm(true);
   renderForm();
+  runPendingAction();
+}
+
+/**
+ * A button in the group message opens the app straight onto the van with the
+ * right dialog already up. This is the moment the van is finally on screen,
+ * so this is where that dialog opens — once, then the request is spent.
+ */
+function runPendingAction(){
+  const act = S.pendingAction;
+  if(!act || !S.current) return;
+  S.pendingAction = '';
+  if(act === 'eml'){
+    toast('The evaluation email is not set up yet — nothing was sent.', 5000);
+    return;
+  }
+  if(act === 'sup' || act === 'oem') askName('APPROVED', act);
 }
 
 function showForm(on){
@@ -2135,6 +2180,7 @@ window.__P5 = 1;
   // one, which is where a load now lives.
   if (INITIAL_LOAD) { S.sort = 'load'; S.q = INITIAL_LOAD; }
   refresh();
+  if (INITIAL_ACT) S.pendingAction = INITIAL_ACT;
   if (INITIAL_VIN) openVin(INITIAL_VIN);
 })();
 </script>
