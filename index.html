@@ -982,8 +982,32 @@ function openVin(vin){
   }).apiGet(vin);
 }
 
+/**
+ * The answer options are baked into the page by Apps Script, but in the
+ * Telegram build they arrive with the first bootstrap response. A deep link
+ * fetches its VIN far faster than that, so the form can be asked to draw
+ * before it knows what buttons to draw. Wait for them rather than throwing.
+ */
+function optionsReady(){ return !!(OPT && OPT.docState && OPT.docState.length); }
+
 /** Put a VIN record on screen, drafts and all. */
-function paintVin(r){
+function paintVin(r, waited){
+  if(!optionsReady()){
+    waited = (waited || 0) + 1;
+    if(waited > 60){                      // ~9s, then draw with what we have
+      toast('Still loading the checklist options…', 3000);
+    } else {
+      showForm(true);
+      $('formView').innerHTML =
+        '\x3cdiv class="empty">\x3cspan class="spin">\x3c/span> Loading ' + esc(r.vin) + '…\x3c/div>';
+      setTimeout(function(){ paintVin(r, waited); }, 150);
+      return;
+    }
+  }
+  return paintVinNow(r);
+}
+
+function paintVinNow(r){
   r = Object.assign({}, r);
   const d = loadDraft(r.vin);
   if(d) Object.assign(r, d, {vin:r.vin, photoLinks:r.photoLinks, photoCount:r.photoCount,
@@ -1013,6 +1037,7 @@ function showForm(on){
 }
 
 function seg(field, values, styleFor){
+  if(!values || !values.length) return '';     // options not here yet
   const cur=S.current[field]||'';
   return '\x3cdiv class="seg">'+values.map(v=>{
     const x=styleFor?styleFor(v):'';
