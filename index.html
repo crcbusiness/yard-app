@@ -55,6 +55,9 @@
   .p-REQUESTED{background:#12304a;color:#7dd3fc}
   .p-APPROVED{background:#0d3327;color:#34d399}
   .p-DOCS{background:#3a2410;color:#fdba74}
+  /* who inspected it and when, nested under the VIN it belongs to */
+  .insp{font-size:11.5px;line-height:1.3;color:var(--dim);margin-top:6px}
+  .insp b{color:#c9d2da;font-weight:650}
 
   /* read-only inspection summary shown when a VIN is opened from Eval */
   .why{background:#1c1418;border:1px solid #40232a;border-radius:10px;padding:12px 14px;margin-bottom:16px}
@@ -388,7 +391,10 @@ const POS_MAX  = 99;
 let S = {
   view:'vins', sort:'bay', q:'', bayFree:false, homeYard:'', expandedLoad:'',
   evalMode:false, unlocked:false, showApproved:false, nameKind:'',
-  rows:[], loads:[], counts:{}, current:null, pendingPhotos:0, confirmMissing:false
+  rows:[], loads:[], counts:{}, current:null, pendingPhotos:0, confirmMissing:false,
+  // Sort-by-load in the VIN tab opens every load. This holds the ones he has
+  // folded shut, so a load stays closed while he works the rest of the list.
+  collapsed:{}
 };
 
 /* ---------- utils ---------- */
@@ -454,9 +460,22 @@ function evalTags(r){
   return t.join('');
 }
 
+/**
+ * "Inspected by Antony · Sep 2, 14:20", nested under the VIN.
+ * Shown wherever a finished VIN appears — the list, and inside a load.
+ */
+function inspectedLine(r){
+  if(!resolved(r)) return '';
+  if(!r.inspectedBy && !r.inspectedAt) return '';
+  const what = r.status==='MISSING' ? 'Marked missing by ' : 'Inspected by ';
+  return '<div class="insp">' + what +
+         '<b>' + esc(r.inspectedBy || 'unknown') + '</b>' +
+         (r.inspectedAt ? ' · ' + esc(r.inspectedAt) : '') + '</div>';
+}
+
 function tagsFor(r){
   const t=[];
-  if(r.status==='DONE') t.push('<span class="pill p-DONE">DONE</span>');
+  if(r.status==='DONE') t.push('<span class="pill p-DONE">INSPECTED</span>');
   else if(r.status==='MISSING') t.push('<span class="pill p-MISSING">MISSING</span>');
   else if(r.status==='IN PROGRESS') t.push('<span class="pill p-PROGRESS">IN PROGRESS</span>');
   else if(r.status==='REMOVED') t.push('<span class="pill p-REMOVED">REMOVED</span>');
@@ -565,15 +584,43 @@ function render(){
   else renderVins();
 }
 
-/* ================= LOADS ================= */
-function loadVins(loadId){
-  return S.rows.filter(r=>r.loadId===loadId && !hidden(r)).sort(cmpBay);
+/* ================= LOADS =================
+   One load card, used by two screens: the Loads tab (one load open at a
+   time, the overview) and the VIN tab on "Sort by Load ID" (every load
+   open, because that is the list he walks). Only the open/shut rule and
+   the search filter differ. */
+
+/** Same fields the VIN list searches, so a load and its VINs agree. */
+function vinMatch(r, q){
+  if(!q) return true;
+  return (r.vin+' '+r.loadId+' '+bay(r)+' '+bayDisplay(bay(r))+' '+r.pickup)
+           .toUpperCase().includes(q);
+}
+
+function loadVins(loadId, q){
+  return S.rows.filter(r=>r.loadId===loadId && !hidden(r) && vinMatch(r,q)).sort(cmpBay);
+}
+
+/** Open by default in the VIN tab; one at a time in the Loads tab. */
+function loadOpen(l){
+  if(S.view!=='vins') return S.expandedLoad===l.loadId;
+  const c = S.collapsed[l.loadId];
+  if(c !== undefined) return !c;                    // he folded it himself; leave it
+  if(S.q.trim()) return true;                       // searching: show the hits
+  // A load with nothing left to inspect still needs signing off, so it stays
+  // open. Only what he has already signed folds away.
+  return !l.signedOffAt;
+}
+
+function secHead(title, n){
+  return '<div class="ghead"><span>'+title+'</span><span class="ln"></span>' +
+         '<span class="n">'+n+'</span></div>';
 }
 
 function loadCard(l){
   const pct = l.total ? Math.round(l.done/l.total*100) : 0;
-  const open = S.expandedLoad===l.loadId;
-  const vins = open ? loadVins(l.loadId) : [];
+  const open = loadOpen(l);
+  const vins = open ? loadVins(l.loadId, S.q.trim().toUpperCase()) : [];
   const state = l.signedOffAt ? 'signed' : (l.pending===0 && l.total>0 ? 'ready' : 'pending');
 
   const rows = vins.map(r=>`
@@ -583,13 +630,14 @@ function loadCard(l){
         <span class="lv-bay">${esc(bayDisplay(bay(r))||'no bay')}</span>
         ${tagsFor(r)}
       </span>
+      ${inspectedLine(r)}
     </div>`).join('');
 
   let action;
   if(l.signedOffAt){
     action = `<div class="signoff">✓ Signed off ${esc(l.signedOffAt)}${l.signedOffBy?' · '+esc(l.signedOffBy):''}</div>`;
   } else if(l.pending===0 && l.total>0){
-    action = `<button class="lcomplete go" onclick="completeLoad('${esc(l.loadId)}',event)">Mark load complete</button>`;
+    action = `<button class="lcomplete go" onclick="completeLoad('${esc(l.loadId)}',event)">Mark Load Inspection Complete</button>`;
   } else {
     action = `<button class="lcomplete wait" disabled>${l.done} of ${l.total} inspected — finish them all first</button>`;
   }
@@ -598,10 +646,7 @@ function loadCard(l){
     l.pending ? `<span class="lchip c-pending">${l.pending} PENDING</span>`
               : `<span class="lchip c-ready">ALL INSPECTED</span>`,
     l.missing ? `<span class="lchip c-missing">${l.missing} MISSING</span>` : '',
-    l.damage  ? `<span class="lchip c-damage">${l.damage} DAMAGED</span>` : '',
-    l.pickup  ? `<span class="lchip c-info">${esc(l.pickup)}</span>` : '',
-    (l.dests&&l.dests.length>1) ? `<span class="lchip c-info">${l.dests.length} drops</span>`
-      : ((l.dests&&l.dests[0]) ? `<span class="lchip c-info">${esc(l.dests[0])}</span>` : '')
+    l.damage  ? `<span class="lchip c-damage">${l.damage} DAMAGED</span>` : ''
   ].filter(Boolean).join('');
 
   return `<div class="loadcard ${state} ${open?'open':''}">
@@ -627,14 +672,47 @@ function renderLoads(){
   }
   $('listView').innerHTML =
     (open.length ? open.map(loadCard).join('') : '<div class="empty">Nothing pending. Good.</div>') +
-    (finished.length ? '<div class="ghead"><span>FULLY INSPECTED</span><span class="ln"></span>'
-                       + '<span class="n">'+finished.length+'</span></div>'
+    (finished.length ? secHead('FULLY INSPECTED', finished.length)
                        + finished.map(loadCard).join('') : '');
 }
 
+/**
+ * The VIN tab on "Sort by Load ID": the load cards themselves, already open,
+ * so the whole load — progress, the VINs, the sign-off button — is in the
+ * list he is standing in rather than a tab away.
+ */
+function renderLoadGroups(){
+  const q = S.q.trim().toUpperCase();
+  const hit = l => !q || loadVins(l.loadId, q).length > 0;
+  // Open work first — anything still being walked, plus anything walked but
+  // not yet signed off. Signed loads drop to the bottom, out of the way.
+  const open     = S.loads.filter(l=>!l.signedOffAt && hit(l));
+  const finished = S.loads.filter(l=>!!l.signedOffAt && hit(l));
+
+  // Pending VINs on no load still have to be walked, so they keep a group.
+  const orphans = S.rows
+    .filter(r=>!r.loadId && !hidden(r) && (q ? vinMatch(r,q) : !resolved(r)))
+    .sort(cmpBay);
+
+  if(!open.length && !finished.length && !orphans.length){
+    return '<div class="empty">'+(q?'Nothing matches that.':'Nothing pending here.')+'</div>';
+  }
+  return open.map(loadCard).join('') +
+    (finished.length ? secHead('SIGNED OFF', finished.length)
+                       + finished.map(loadCard).join('') : '') +
+    (orphans.length ? secHead('NO LOAD ID', orphans.length)
+                      + '<div class="cards">'+orphans.map(r=>vinCard(r,true)).join('')+'</div>' : '');
+}
+
 function toggleLoad(id){
-  S.expandedLoad = (S.expandedLoad===id) ? '' : id;
-  renderLoads();
+  if(S.view==='vins'){
+    const l = S.loads.filter(function(x){ return x.loadId===id; })[0];
+    S.collapsed[id] = (l ? loadOpen(l) : true);     // whatever it is now, flip it
+    renderVins();
+  } else {
+    S.expandedLoad = (S.expandedLoad===id) ? '' : id;
+    renderLoads();
+  }
 }
 
 /** Tapping a VIN inside a load opens that VIN's inspection directly. */
@@ -655,7 +733,7 @@ function completeLoad(loadId, e){
       refresh();
     },
     fail:err=>{
-      if(btn){ btn.disabled=false; btn.textContent='Mark load complete'; }
+      if(btn){ btn.disabled=false; btn.textContent='Mark Load Inspection Complete'; }
       toast(err.message, 4000);
     }
   });
@@ -677,6 +755,7 @@ function vinCard(r, hideLoad, evalCtx){
   return `<button class="card" onclick="openVin('${r.vin}')">
     <div class="vin">${esc(head)}<span class="t">${esc(tail)}</span></div>
     <div class="tags">${evalCtx ? evalTags(r) : tagsFor(r)}</div>
+    ${inspectedLine(r)}
     <div class="facts">
       ${loadFact}
       <div class="fact" style="flex:1.2"><div class="k">BAY</div>
@@ -694,37 +773,26 @@ function vinCard(r, hideLoad, evalCtx){
 function renderVins(){
   const q = S.q.trim().toUpperCase();
 
-  let rows = S.rows.filter(r=>{
-    if(q) return true;                 // search spans every status, including done
-    return !resolved(r) && !hidden(r);
-  });
-  if(q) rows = rows.filter(r=>(r.vin+' '+r.loadId+' '+bay(r)+' '+bayDisplay(bay(r))+' '+r.pickup)
-                                .toUpperCase().includes(q));
-
-  rows = rows.slice().sort(COMPARE[S.sort] || cmpBay);
-
   const sortBtn = (k,label) => `<button class="${S.sort===k?'on':''}" onclick="setSort('${k}')">${label}</button>`;
   const controls = `
     <input class="search" id="q" placeholder="Search VIN, load, bay…" value="${esc(S.q)}" autocomplete="off">
     <div class="sortbar">${sortBtn('bay','Sort by Bay')}${sortBtn('load','Sort by Load ID')}</div>`;
 
   let list;
-  if(!rows.length){
-    list = `<div class="empty">Nothing pending here.</div>`;
-  } else if(S.sort==='load'){
-    const groups=[]; let cur=null;
-    rows.forEach(r=>{
-      const id = r.loadId || '';
-      if(!cur || cur.id!==id){ cur={id:id, rows:[]}; groups.push(cur); }
-      cur.rows.push(r);
-    });
-    list = groups.map(g=>
-      `<div class="ghead"><span>${g.id?esc(g.id):'NO LOAD ID'}</span>
-        <span class="ln"></span><span class="n">${g.rows.length}</span></div>` +
-      `<div class="cards">${g.rows.map(r=>vinCard(r, !!g.id)).join('')}</div>`
-    ).join('');
+  if(S.sort==='load'){
+    // The whole load, not just its unfinished VINs — progress and sign-off
+    // only mean something against the full set.
+    list = renderLoadGroups();
   } else {
-    list = `<div class="cards">${rows.map(r=>vinCard(r, false)).join('')}</div>`;
+    let rows = S.rows.filter(r=>{
+      if(q) return true;                 // search spans every status, including done
+      return !resolved(r) && !hidden(r);
+    });
+    if(q) rows = rows.filter(r=>vinMatch(r,q));
+    rows = rows.slice().sort(cmpBay);
+    list = rows.length
+      ? `<div class="cards">${rows.map(r=>vinCard(r, false)).join('')}</div>`
+      : `<div class="empty">Nothing pending here.</div>`;
   }
 
   $('listView').innerHTML = controls + list;
