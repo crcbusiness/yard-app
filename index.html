@@ -194,6 +194,7 @@
          border:1px solid var(--line);padding:11px 18px;border-radius:24px;font-size:14px;
          z-index:60;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90%}
   .toast.show{opacity:1}
+  .toast{white-space:pre-line}          /* the sync bar lists one item per line */
   .kv{font-size:13px;color:var(--dim);margin-bottom:3px}
   .kv b{color:var(--txt);font-weight:600}
   .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff5;border-top-color:#fff;
@@ -404,6 +405,14 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;',
 function driveId(u){ const m=String(u).match(/[-\w]{25,}/); return m?m[0]:''; }
 function thumb(u){ const id=driveId(u); return id?('https://drive.google.com/thumbnail?id='+id+'&sz=w400'):u; }
 function bay(r){ return r.bayActual || r.baySheet || ''; }
+
+/** "Sep 2, 16:41" — the same shape the server writes, made on the phone. */
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function nowStamp(){
+  const d = new Date();
+  return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' +
+         String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
 const pad2 = n => String(n).padStart(2,'0');
 const resolved = r => r.status==='DONE' || r.status==='MISSING';
 const hidden   = r => r.status==='REMOVED' || r.status==='OFF-SITE';
@@ -543,6 +552,10 @@ function refresh(){
   google.script.run.withSuccessHandler(d=>{
     d = d || {};
     S.rows=d.rows||[]; S.loads=d.loads||[]; S.counts=d.counts||{}; S.homeYard=d.homeYard||'';
+    // The server does not know about work that has not been sent yet. Without
+    // this, a refresh wipes it off the screen: he signs a van in a dead zone,
+    // the list refreshes, and the van he just finished is PENDING again.
+    applyOutboxLocally();
     cacheSave(d);
     if(d.botLink) window.__BOT_LINK = d.botLink;
     paintCounts(d);
@@ -566,6 +579,37 @@ function paintCounts(d){
   const c = (d && d.counts) || {};
   $('cP').textContent='('+(c.pending||0)+')';
   $('cD').textContent='('+((c.evalOpen||0) + (c.evalRequested||0))+')';
+}
+
+/**
+ * Rebuild each load's tallies from the rows the phone is holding.
+ *
+ * The server sends these with the bootstrap, so a load's progress bar only
+ * moved after a full round trip — sign five of six vans in a dead zone and
+ * the load still reads "1/6, 5 PENDING" while every row under it says
+ * INSPECTED. The rows and the bar have to come from the same place.
+ *
+ * If the phone is holding fewer rows for a load than the server counted
+ * (completed work is capped in the payload), the server's numbers are left
+ * alone rather than guessed at.
+ */
+function recomputeLoads(){
+  const by = {};
+  S.rows.forEach(r=>{
+    const id = (r.loadId||'').trim();
+    if(!id || hidden(r)) return;                 // REMOVED / OFF-SITE are not ours to walk
+    const L = by[id] || (by[id] = {total:0, done:0, pending:0, missing:0, damage:0});
+    L.total++;
+    if(resolved(r)) L.done++; else L.pending++;
+    if(r.status==='MISSING') L.missing++;
+    if(r.damage==='YES') L.damage++;
+  });
+  S.loads.forEach(l=>{
+    const n = by[l.loadId];
+    if(!n || n.total < l.total) return;
+    l.total=n.total; l.done=n.done; l.pending=n.pending;
+    l.missing=n.missing; l.damage=n.damage;
+  });
 }
 
 /** Show the yard from the last good load. Returns false if there isn't one. */
@@ -924,7 +968,8 @@ function saveEdits(){
 
   const localFresh = Object.assign({}, r, {
     status: full ? 'DONE' : (r.status==='PENDING' ? 'IN PROGRESS' : r.status),
-    inspectedBy: me()
+    inspectedBy: me(),
+    inspectedAt: nowStamp()
   });
   mutate({
     fn:'apiSave', vin:r.vin,
@@ -1169,7 +1214,7 @@ function markMissing(){
   mutate({
     fn:'apiMarkMissing', args:[vin, '', me()], vin:vin,
     ok:(r, queued)=>{
-      if(queued) patchLocal(vin, {status:'MISSING', inspectedBy:me()});
+      if(queued) patchLocal(vin, {status:'MISSING', inspectedBy:me(), inspectedAt:nowStamp()});
       clearDraft(vin);
       toast('…'+vin.slice(-6)+' marked MISSING'+(queued?' — waiting for signal':''), 2600);
       backToList();
@@ -1484,7 +1529,8 @@ function save(complete){
 
   const localFresh = Object.assign({}, r, {
     status: complete ? 'DONE' : (r.status==='PENDING' ? 'IN PROGRESS' : r.status),
-    inspectedBy: me()
+    inspectedBy: me(),
+    inspectedAt: nowStamp()          // when he inspected it, not when it reached the server
   });
 
   mutate({
@@ -1704,6 +1750,7 @@ function enqueue(entry){
   const q = outbox();
   entry.id = entry.id || ('q' + Date.now() + Math.random().toString(36).slice(2,7));
   entry.ts = Date.now();
+  entry.stamp = entry.stamp || nowStamp();      // when he actually did it, not when it sent
   q.push(entry);
   if(!outboxSet(q)){
     if(entry.fn !== 'apiUploadPhoto'){
@@ -1892,6 +1939,17 @@ function flushOutbox(){
   const run = google.script.run
     .withSuccessHandler(res => finish(() => {
       if(entry.fn === 'apiUploadPhoto') photoLandedSafe(entry, res);
+      else if(res && res.vin){
+        // The server's version of the row, with its real timestamp, replaces
+        // the one we painted optimistically. Not S.current — he may have the
+        // van open again and be part way through a change.
+        patchRow_(res.vin, res);
+        recomputeLoads();
+        // Repaint, unless he is typing in the search box — rebuilding the list
+        // under him would take the keyboard away mid-word.
+        const q = document.getElementById('q');
+        if(!S.current && !(q && document.activeElement === q)) render();
+      }
       ack_(entry.id, 'ok', res, false);        // "saved", if anything is still listening
       done(true);
     }))
@@ -1947,16 +2005,69 @@ function paintSync(){
   el.innerHTML =
     '<span>' + (off ? 'No signal — ' : 'Sending — ') + bits.join(' + ') +
     ' held on this phone</span>' + (off ? '' : '<span class="spin"></span>');
-  el.onclick = () => { if(navigator.onLine !== false) restartFlush(); };
+  // Tap: say exactly what is waiting and how long it has been, then try again.
+  // Otherwise "3 photos held" is all anyone can ever know about a stuck queue.
+  el.onclick = () => {
+    const q = outbox();
+    const name = { apiUploadPhoto:'photo', apiSave:'inspection',
+                   apiMarkMissing:'missing', apiCompleteLoad:'load sign-off',
+                   apiSetEval:'evaluation' };
+    const lines = q.slice(0, 6).map(e=>{
+      const mins = Math.round((Date.now() - (e.ts||Date.now()))/60000);
+      return (name[e.fn] || e.fn) + ' ' + (e.vin ? '…'+String(e.vin).slice(-6) : '') +
+             ' · ' + (mins < 1 ? 'just now' : mins + ' min');
+    });
+    if(q.length > 6) lines.push('and ' + (q.length-6) + ' more');
+    toast(lines.join('\n') || 'Nothing waiting', 6000);
+    if(navigator.onLine !== false) restartFlush();
+  };
 }
 
-/* ---------- keep the list in step while offline ---------- */
-function patchLocal(vin, patch){
+/* ---------- keep the list in step while work is still waiting ---------- */
+
+/** One row in the list, without touching whatever form is open. */
+function patchRow_(vin, patch){
   for(let i = 0; i < S.rows.length; i++){
-    if(S.rows[i].vin === vin){ S.rows[i] = Object.assign({}, S.rows[i], patch); break; }
+    if(S.rows[i].vin === vin){ S.rows[i] = Object.assign({}, S.rows[i], patch); return true; }
   }
+  return false;
+}
+
+function patchLocal(vin, patch){
+  patchRow_(vin, patch);
   if(S.current && S.current.vin === vin) S.current = Object.assign({}, S.current, patch);
+  recomputeLoads();          // the bar has to move with the rows under it
   cacheSave({rows: S.rows, loads: S.loads, counts: S.counts, homeYard: S.homeYard});
+}
+
+/**
+ * Lay everything still waiting in the outbox back over the rows the server
+ * just handed us.
+ *
+ * The server's answer is the truth about what it has been told — but it has
+ * not been told about the vans sitting in the outbox. Replaying them keeps
+ * the screen honest: server state, plus the work he has done since.
+ */
+function applyOutboxLocally(){
+  outbox().forEach(e=>{
+    const when = e.stamp || '';
+    if(e.fn === 'apiSave'){
+      const p = (e.args && e.args[0]) || {};
+      if(!p.vin) return;
+      patchRow_(p.vin, Object.assign({}, p, {
+        status: p.complete ? 'DONE' : 'IN PROGRESS',
+        inspectedBy: p.actor || me(),
+        inspectedAt: when
+      }));
+    } else if(e.fn === 'apiMarkMissing'){
+      patchRow_(e.args[0], {
+        status: 'MISSING', inspectedBy: e.args[2] || me(), inspectedAt: when
+      });
+    } else if(e.fn === 'apiSetEval'){
+      patchRow_(e.args[0], { evalStatus: e.args[1] });
+    }
+  });
+  recomputeLoads();
 }
 
 /** The row this VIN already is, from what the phone is holding. */
