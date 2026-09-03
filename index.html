@@ -358,9 +358,21 @@ function callApi(fn, args, ok, fail) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ fn: fn, args: args || [], initData: tg ? tg.initData : '' })
   })
-  .then(r => r.json())
-  .then(d => { if (d.ok) ok(d.data); else fail({ message: d.error || 'Request failed' }); })
-  .catch(e => fail({ message: e.message || 'No connection' }));
+  .then(r => r.text())
+  .then(t => {
+    let d;
+    try { d = JSON.parse(t); }
+    catch (e) {
+      /* Apps Script sometimes answers with an HTML page rather than data — a
+         sign-in page, "unable to open the file at this time", or a transient
+         Google error. That is a connection problem, NOT a rejected request:
+         say so clearly, so the outbox retries it instead of binning the
+         supervisor's work. */
+      throw new Error('CONNECTION: the server sent a page instead of data');
+    }
+    if (d.ok) ok(d.data); else fail({ message: d.error || 'Request failed' });
+  })
+  .catch(e => fail({ message: e.message || 'CONNECTION: no answer' }));
 }
 
 /* Stand in for google.script.run.
@@ -583,8 +595,8 @@ function refresh(){
     if(S.rows.length){
       const why = String((e && e.message) || 'no reason given');
       toast(isNetworkProblem(e)
-        ? 'No signal — showing the last list.'
-        : 'Server error — showing the last list.\n' + why, 7000);
+        ? 'Could not reach the server — showing the last list. It keeps trying.'
+        : 'Server error — showing the last list.\n' + why, 5000);
     }
     else if(!hydrateFromCache(true)){
       $('listView').innerHTML='<div class="empty">'+esc(e.message)+'</div>';
@@ -1894,12 +1906,26 @@ function dequeue(id){
 }
 
 /* ---------- is this a lost connection, or a real error? ---------- */
+/**
+ * Is this a lost connection, or did the server genuinely reject the request?
+ *
+ * The difference decides whether the change is retried or thrown away, so
+ * getting it wrong is expensive. Google answers a POST with an HTML page more
+ * often than you would like — a sign-in page, "unable to open the file at
+ * this time", a transient error. The browser then fails parsing it as JSON
+ * and reports "Unexpected token '<'". That used to read as a real rejection,
+ * and the supervisor's inspection was dropped with it.
+ */
 function isNetworkProblem(e){
   if(navigator.onLine === false) return true;
   const m = String((e && e.message) || e || '').toLowerCase();
-  return m.indexOf('network') !== -1 || m.indexOf('timeout') !== -1 ||
-         m.indexOf('failed to fetch') !== -1 || m.indexOf('offline') !== -1 ||
-         m.indexOf('internal error') !== -1;
+  return [
+    'connection', 'network', 'timeout', 'failed to fetch', 'offline',
+    'internal error', 'load failed',
+    // a page where data should have been
+    'not valid json', 'unexpected token', '<!doctype', 'json parse',
+    'unexpected end of input'
+  ].some(s => m.indexOf(s) !== -1);
 }
 
 /* ==================================================================
@@ -1963,6 +1989,7 @@ function mutate(spec){
 let flushing = false;
 let flushSince = 0;
 let flushCancel = null;      // abandons the attempt in flight
+let failStreak = 0;          // consecutive failures, for backing off
 
 /**
  * Give up on whatever is in flight and start again.
@@ -2011,14 +2038,18 @@ function flushOutbox(){
     flushing = false;
     flushCancel = null;
     if(sent){
+      failStreak = 0;
       dequeue(entry.id);
       if(outboxCount()) flushOutbox();       // keep going
       else { toast('Everything is saved.', 2600); refresh(); }
     } else {
+      failStreak++;
       paintSync();
-      // Try again soon rather than waiting for the slow heartbeat — he may
-      // only be in signal for the few seconds it takes to drive past.
-      setTimeout(() => { if(navigator.onLine !== false) flushOutbox(); }, 8000);
+      // Try again soon — he may only be in signal for the few seconds it
+      // takes to drive past — but back off if it keeps failing, so a Google
+      // outage is not met with a request every eight seconds for an hour.
+      const wait = Math.min(120000, 8000 * Math.pow(2, Math.min(failStreak - 1, 4)));
+      setTimeout(() => { if(navigator.onLine !== false) flushOutbox(); }, wait);
     }
   };
 
