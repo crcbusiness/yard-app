@@ -578,7 +578,14 @@ function refresh(){
   }).withFailureHandler(e=>{
     $('refresh').innerHTML='⟳';
     // Fall back to what the phone already knows rather than an empty screen.
-    if(S.rows.length){ toast('Could not reach the server — showing the last list.', 3200); }
+    // Say WHY. "Could not reach the server" reads the same for a dead zone
+    // and for a server error, and the two need completely different actions.
+    if(S.rows.length){
+      const why = String((e && e.message) || 'no reason given');
+      toast(isNetworkProblem(e)
+        ? 'No signal — showing the last list.'
+        : 'Server error — showing the last list.\n' + why, 7000);
+    }
     else if(!hydrateFromCache(true)){
       $('listView').innerHTML='<div class="empty">'+esc(e.message)+'</div>';
     }
@@ -897,17 +904,30 @@ function renderEval(){
   };
 }
 
-/* ---- read-only inspection summary, shown when a VIN is opened from Eval ---- */
+/* ==================================================================
+   THE RECORD OF A FINISHED VAN
+
+   Once a van has been Marked Inspected it stops being a form. This is
+   what he sees instead — what was found, who found it, when — whether
+   he reached it from the VIN list, a load, or the Eval tab.
+
+   Unlock Inspection is the way back to the checklist. That is the whole
+   point: the editable form was previously one tap away with "Mark
+   complete" live under his thumb, and pressing it again re-sent the
+   alert to the group.
+   ================================================================== */
 const REASON_TEXT = {
   DAMAGE:'Damage was found during inspection',
   MISSING:'The van was not in the yard',
   DOCUMENTS:'A required document is missing'
 };
 
-function renderEvalSummary(){
+function renderInspected(){
   const r = S.current;
+  const flagged = (r.evalReasons||[]).length > 0;
+  const bad = v => v && v!=='YES';
   const doc = (label, v) =>
-    `<tr><td>${label}</td><td class="${v==='NO'?'bad':(v?'':'none')}">${esc(v||'—')}</td></tr>`;
+    `<tr><td>${label}</td><td class="${bad(v)?'bad':(v?'':'none')}">${esc(v||'—')}</td></tr>`;
   const row = (label, v) =>
     `<tr><td>${label}</td><td class="${v?'':'none'}">${esc(v||'—')}</td></tr>`;
 
@@ -916,7 +936,7 @@ function renderEvalSummary(){
 
     <div class="grp">
       <div class="vin" style="font-size:20px">${esc(r.vin)}</div>
-      <div class="tags">${evalTags(r)}</div>
+      <div class="tags">${flagged ? evalTags(r) : tagsFor(r)}</div>
       <div class="facts" style="margin-top:11px">
         <div class="fact" style="flex:1"><div class="k">LOAD ID</div>
           <div class="v ${r.loadId?'':'none'}">${esc(r.loadId||'— none —')}</div></div>
@@ -925,10 +945,11 @@ function renderEvalSummary(){
       </div>
     </div>
 
-    <div class="why">
-      <h5>Why it's here</h5>
-      <ul>${(r.evalReasons||[]).map(x=>`<li>${REASON_TEXT[x]||x}</li>`).join('')}</ul>
-    </div>
+    ${flagged ? `
+      <div class="why">
+        <h5>Why it's here</h5>
+        <ul>${(r.evalReasons||[]).map(x=>`<li>${REASON_TEXT[x]||x}</li>`).join('')}</ul>
+      </div>` : ''}
 
     <div class="grp">
       <div class="lab">Inspection result</div>
@@ -954,18 +975,21 @@ function renderEvalSummary(){
           `<a href="${esc(u)}" target="_blank"><img src="${esc(thumb(u))}" loading="lazy"></a>`).join('')}</div>
       </div>`:''}
 
-    <button class="unlockbtn" onclick="unlockInspection()">Unlock inspection to edit</button>`;
+    ${flagged && !r.evalStatus
+      ? `<button class="linkbtn" onclick="askName('REQUESTED')">Request an evaluation</button>` : ''}`;
 
-  $('bottom').innerHTML = `
-    <button class="btn sec" onclick="askName('REQUESTED')">Eval requested</button>
-    <button class="btn pri" onclick="askName('APPROVED')">Approve for shipping</button>`;
+  // Unlock is always the right-hand button. A flagged van gets the approval
+  // beside it; a clean one needs nothing else, so Unlock fills the bar.
+  $('bottom').innerHTML =
+    (flagged ? `<button class="btn sec" onclick="askName('APPROVED')">Approve for shipping</button>` : '') +
+    `<button class="btn pri" onclick="unlockInspection()">Unlock Inspection</button>`;
 }
 
 /** Drop back into the editable checklist to redo or add to the inspection. */
 function unlockInspection(){
   S.unlocked = true;
   renderForm();
-  toast('Inspection unlocked — Save changes when you’re done', 2800);
+  toast('Inspection unlocked — Mark Inspected when you’re done', 2800);
 }
 
 function cancelEdits(){
@@ -1013,7 +1037,7 @@ function saveEdits(){
       }
     },
     fail:e=>{
-      btn.disabled = false; btn.textContent = 'Save changes';
+      btn.disabled = false; btn.textContent = 'Mark Inspected';
       toast('Save failed: '+e.message, 4000);
     }
   });
@@ -1157,7 +1181,13 @@ function paintVinNow(r){
   if(!r.bayActual && sb && !parseBay(sb)) r.bayActual = sb;
   S.bayFree = !parseBay(sb);
   S.confirmMissing = false;
-  S.evalMode = (S.view==='eval');
+  /* A van that has been Marked Inspected opens as a record of what was
+     found, not as a live form — and that is true whichever list he came
+     from. Opening a finished van from the VIN list used to hand back the
+     editable checklist with Mark Inspected live under his thumb, so one
+     stray tap re-sent the whole alert to the group. Unfinished work is
+     still just work: it opens as the checklist, as it always did. */
+  S.evalMode = (r.status === 'DONE');
   S.unlocked = false;
   showForm(true);
   renderForm();
@@ -1357,7 +1387,7 @@ function photoWhy(r){
 }
 
 function renderForm(){
-  if(S.evalMode && !S.unlocked) return renderEvalSummary();
+  if(S.evalMode && !S.unlocked) return renderInspected();
   const r=S.current;
   // Nothing to inspect on a van that is not in its bay. Asking for documents
   // and a roof type on a van nobody can see is a form nobody can honestly
@@ -1435,9 +1465,9 @@ function renderForm(){
 
   $('bottom').innerHTML = (S.evalMode && S.unlocked)
     ? `\x3cbutton class="btn sec" onclick="cancelEdits()">Cancel\x3c/button>
-       \x3cbutton class="btn pri" id="saveEditsBtn" onclick="saveEdits()">Save changes\x3c/button>`
+       \x3cbutton class="btn pri" id="saveEditsBtn" onclick="saveEdits()">Mark Inspected\x3c/button>`
     : `\x3cbutton class="btn sec" onclick="save(false)">Save draft\x3c/button>
-       \x3cbutton class="btn pri" id="doneBtn" onclick="save(true)">Mark complete\x3c/button>`;
+       \x3cbutton class="btn pri" id="doneBtn" onclick="save(true)">Mark Inspected\x3c/button>`;
 }
 
 function backToList(){ closeApprove(); S.current=null; S.confirmMissing=false;
@@ -1617,7 +1647,7 @@ function save(complete){
       }
     },
     fail:e=>{
-      if(btn){ btn.disabled=false; btn.textContent='Mark complete'; }
+      if(btn){ btn.disabled=false; btn.textContent='Mark Inspected'; }
       toast('Save failed: '+e.message, 4000);
     }
   });
