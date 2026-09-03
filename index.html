@@ -303,6 +303,10 @@
    ===================================================================== */
 const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-FVhW-yIC0Iw3NYHnZ0AII0SSgqFqI-_wHjWejqfDYB0G6g/exec";
 
+/* Stamped when this file was built. It is the only way to tell, from a phone
+   in a yard, whether the app it is running is the one you just uploaded. */
+window.BUILD_STAMP = "Sep 03 23:13";
+
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
   tg.ready();
@@ -353,13 +357,27 @@ function paintRoles() {
  * The body is still JSON; the server parses it by hand.
  */
 function callApi(fn, args, ok, fail) {
+  /* Every call records what actually came back, because when this fails it
+     fails on a phone in a yard where nobody can open a console. NET holds the
+     last answer: status, content type, how long, and the first scrap of the
+     body. Tap the title three times to read it. */
+  const t0 = Date.now();
+  const net = { fn: fn, status: 0, type: '', ms: 0, snip: '', at: new Date() };
+
   fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ fn: fn, args: args || [], initData: tg ? tg.initData : '' })
   })
-  .then(r => r.text())
+  .then(r => {
+    net.status = r.status;
+    net.type = String(r.headers.get('content-type') || '').split(';')[0];
+    return r.text();
+  })
   .then(t => {
+    net.ms = Date.now() - t0;
+    net.snip = String(t || '').replace(/\s+/g, ' ').slice(0, 160);
+    window.NET = net;
     let d;
     try { d = JSON.parse(t); }
     catch (e) {
@@ -368,11 +386,41 @@ function callApi(fn, args, ok, fail) {
          Google error. That is a connection problem, NOT a rejected request:
          say so clearly, so the outbox retries it instead of binning the
          supervisor's work. */
-      throw new Error('CONNECTION: the server sent a page instead of data');
+      throw new Error('CONNECTION: got a page, not data — HTTP ' + net.status +
+                      ' ' + (net.type || '?') + ' — ' + net.snip);
     }
     if (d.ok) ok(d.data); else fail({ message: d.error || 'Request failed' });
   })
-  .catch(e => fail({ message: e.message || 'CONNECTION: no answer' }));
+  .catch(e => {
+    if (!net.ms) net.ms = Date.now() - t0;
+    window.NET = net;
+    const m = String((e && e.message) || '');
+    // status 0 with nothing read means the request never completed at all —
+    // a different failure from Google answering with the wrong thing.
+    fail({ message: /^CONNECTION:/.test(m) ? m
+         : 'CONNECTION: ' + (m || 'no answer') +
+           ' — HTTP ' + net.status + ' after ' + net.ms + 'ms' });
+  });
+}
+
+/**
+ * What the app is, and what the last call to the server did. Three taps on
+ * the title. It is the only way to see any of this from a phone.
+ */
+function diagText() {
+  const n = window.NET;
+  const L = [];
+  L.push('Build ' + (window.BUILD_STAMP || '?'));
+  L.push('initData ' + (tg && tg.initData ? tg.initData.length + ' chars' : 'MISSING'));
+  L.push('online: ' + (navigator.onLine === false ? 'no' : 'yes'));
+  L.push('');
+  if (!n) { L.push('No server call has completed yet.'); }
+  else {
+    L.push('Last call: ' + n.fn);
+    L.push('HTTP ' + n.status + ' ' + (n.type || '?') + ' in ' + n.ms + 'ms');
+    L.push(n.snip ? n.snip : '(empty body — request never completed)');
+  }
+  return L.join('\n');
 }
 
 /* Stand in for google.script.run.
@@ -594,9 +642,13 @@ function refresh(){
     // and for a server error, and the two need completely different actions.
     if(S.rows.length){
       const why = String((e && e.message) || 'no reason given');
+      // A connection problem gets the plain line, plus the reason on a second
+      // line. "Could not reach the server" reads the same for a dead zone and
+      // for Google answering with a sign-in page, and those need completely
+      // different actions — so say which one it was.
       toast(isNetworkProblem(e)
-        ? 'Could not reach the server — showing the last list. It keeps trying.'
-        : 'Server error — showing the last list.\n' + why, 5000);
+        ? 'Could not reach the server — showing the last list. It keeps trying.\n' + why
+        : 'Server error — showing the last list.\n' + why, 7000);
     }
     else if(!hydrateFromCache(true)){
       $('listView').innerHTML='<div class="empty">'+esc(e.message)+'</div>';
@@ -2309,6 +2361,21 @@ if (tg) {
   };
   try { inset(); tg.onEvent('safeAreaChanged', inset); } catch (e) {}
 }
+
+/* Three taps on the title prints what this build is and what the last call to
+   the server actually returned. Deliberately hidden — a supervisor will never
+   find it by accident, and it is the only window into a phone in the field. */
+(function () {
+  const t = document.getElementById('title');
+  if (!t) return;
+  let n = 0, timer = null;
+  t.addEventListener('click', function () {
+    n++;
+    clearTimeout(timer);
+    timer = setTimeout(function () { n = 0; }, 900);
+    if (n >= 3) { n = 0; toast(diagText(), 20000); }
+  });
+})();
 </script>
 </body>
 </html>
