@@ -4,6 +4,11 @@
 <base target="_top">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- EXPERIMENT: the page had no title at all, so Telegram fell back to the
+     BotFather name in the minimised bar. If that bar now reads "Yard
+     Pre-Inspection", Telegram mirrors this and the sync status can live
+     there. Delete this line to go back. -->
+<title>Yard Pre-Inspection</title>
 <style>
   :root{
     --bg:#0f1115; --card:#171a21; --card2:#1d222b; --line:#262b36; --txt:#e8eaed; --dim:#9aa3b2;
@@ -574,7 +579,7 @@ function refresh(){
     $('refresh').innerHTML='⟳';
     // Fall back to what the phone already knows rather than an empty screen.
     if(S.rows.length){ toast('Could not reach the server — showing the last list.', 3200); }
-    else if(!hydrateFromCache()){
+    else if(!hydrateFromCache(true)){
       $('listView').innerHTML='<div class="empty">'+esc(e.message)+'</div>';
     }
     paintSync();
@@ -621,14 +626,24 @@ function recomputeLoads(){
 }
 
 /** Show the yard from the last good load. Returns false if there isn't one. */
-function hydrateFromCache(){
+/**
+ * Paint the yard from the phone's copy.
+ *
+ * At boot this is just a head start — the real list lands a second later, so
+ * saying "showing the yard as of 20 minutes ago" every single time the app
+ * opens is noise that is wrong almost immediately. It is only worth saying
+ * when the server could NOT be reached and the old copy is what he is stuck
+ * with, which is the only place `announce` is set.
+ */
+function hydrateFromCache(announce){
   const c = cacheLoad();
   if(!c) return false;
   const d = c.d;
   S.rows=d.rows||[]; S.loads=d.loads||[]; S.counts=d.counts||{}; S.homeYard=d.homeYard||'';
+  applyOutboxLocally();
   paintCounts(d);
   if(!S.current) render();
-  toast('Showing the yard as of ' + cacheAgeText() + '.', 3000);
+  if(announce) toast('No connection — showing the yard as of ' + cacheAgeText() + '.', 4000);
   return true;
 }
 
@@ -2017,6 +2032,9 @@ function flushOutbox(){
 }
 
 /* ---------- the "waiting to sync" bar ---------- */
+/* No "are you sure you want to close?" prompt. The queue survives being
+   closed and sends itself on the next open, so nagging him every time he
+   leaves the app with a photo outstanding would cost more than it saves. */
 function paintSync(){
   let el = document.getElementById('syncbar');
   const n = outboxCount();
@@ -2128,6 +2146,19 @@ setInterval(() => {
   if(!outboxCount() || navigator.onLine === false) return;
   if(flushStuck()) restartFlush(); else flushOutbox();
 }, 20000);
+
+/* ---------- coming back to the app ----------
+   A phone suspends a page it cannot see: timers stop, a request in flight is
+   frozen. So the moment the app is on screen again, pick up where we left
+   off rather than waiting out the twenty-second heartbeat. */
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState !== 'visible') return;
+  paintSync();
+  // Always restart rather than resume. A request that was in flight when the
+  // phone suspended the page is not coming back — waiting out its timeout
+  // wastes the first half minute of him being in signal again.
+  if(outboxCount() && navigator.onLine !== false) restartFlush();
+});
 
 window.__P5 = 1;
 </script>
