@@ -96,6 +96,11 @@
   .loadcard.ready::before{background:var(--ok)}
   .loadcard.signed::before{background:var(--accent)}
   .loadcard.open{border-color:var(--accent)}
+  /* A load with nothing left to inspect now sorts to the top, so it should
+     also read as finished-bar-one-tap before anything is actually read. The
+     open state still wins the border — that is where his thumb is. */
+  .loadcard.ready:not(.open){border-color:#1f6b4a}
+  .loadcard.ready .lid{color:#4ade80}
   .lhead{padding:14px 15px 14px 17px}
   .lrow{display:flex;align-items:center;gap:10px}
   .lid{font:700 20px/1.15 ui-monospace,SFMono-Regular,Menlo,monospace;flex:1;
@@ -305,7 +310,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 03 23:13";
+window.BUILD_STAMP = "Sep 04 13:26";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -773,7 +778,10 @@ function loadCard(l){
 
   let action;
   if(l.signedOffAt){
-    action = `<div class="signoff">✓ Signed off ${esc(l.signedOffAt)}${l.signedOffBy?' · '+esc(l.signedOffBy):''}</div>`;
+    // The load's status has gone to the group. Since it now publishes itself
+    // when the last van lands, nobody necessarily "signed" anything — this
+    // says what actually happened.
+    action = `<div class="signoff">✓ Load status sent ${esc(l.signedOffAt)}${l.signedOffBy?' · '+esc(l.signedOffBy):''}</div>`;
   } else if(l.pending===0 && l.total>0){
     action = `<button class="lcomplete go" onclick="completeLoad('${esc(l.loadId)}',event)">Mark Load Inspection Complete</button>`;
   } else {
@@ -805,12 +813,35 @@ function loadCard(l){
  * "Sort by Load ID": the load cards themselves, already open, so the whole
  * load — progress, the VINs, the sign-off button — is right there.
  */
+/* How far along a load is, 0 to 1. The sort key for the whole list. */
+function loadProgress(l){
+  return (l && l.total) ? (l.done || 0) / l.total : 0;
+}
+
+/**
+ * Nearest to finished, first.
+ *
+ * A load at 3/3 is one tap from closed, so it belongs at the top of the
+ * screen — it used to sit at the bottom and have to be scrolled to, which is
+ * exactly backwards. 1/1 and 3/3 both read 100% and rank together; 2/4 and
+ * 1/2 both read half. An untouched load is 0% and sinks on its own, no
+ * special case needed: the work starts in the bay-sorted VIN list, not here,
+ * so a new load has nothing to offer until someone has walked part of it.
+ *
+ * Ties break oldest-first, which is how the server used to order everything.
+ */
+function byProgress(a, b){
+  const d = loadProgress(b) - loadProgress(a);
+  if(Math.abs(d) > 0.0001) return d;
+  return (a.oldest || 0) - (b.oldest || 0);
+}
+
 function renderLoadGroups(){
   const q = S.q.trim().toUpperCase();
   const hit = l => !q || loadVins(l.loadId, q).length > 0;
   // Open work first — anything still being walked, plus anything walked but
   // not yet signed off. Signed loads drop to the bottom, out of the way.
-  const open     = S.loads.filter(l=>!l.signedOffAt && hit(l));
+  const open     = S.loads.filter(l=>!l.signedOffAt && hit(l)).sort(byProgress);
   const finished = S.loads.filter(l=>!!l.signedOffAt && hit(l));
 
   // Pending VINs on no load still have to be walked, so they keep a group.
@@ -822,7 +853,7 @@ function renderLoadGroups(){
     return '<div class="empty">'+(q?'Nothing matches that.':'Nothing pending here.')+'</div>';
   }
   return open.map(loadCard).join('') +
-    (finished.length ? secHead('SIGNED OFF', finished.length)
+    (finished.length ? secHead('INSPECTED — STATUS SENT', finished.length)
                        + finished.map(loadCard).join('') : '') +
     (orphans.length ? secHead('NO LOAD ID', orphans.length)
                       + '<div class="cards">'+orphans.map(r=>vinCard(r,true)).join('')+'</div>' : '');
