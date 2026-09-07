@@ -310,7 +310,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 04 13:26";
+window.BUILD_STAMP = "Sep 04 19:24";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -778,10 +778,12 @@ function loadCard(l){
 
   let action;
   if(l.signedOffAt){
-    // The load's status has gone to the group. Since it now publishes itself
-    // when the last van lands, nobody necessarily "signed" anything — this
-    // says what actually happened.
-    action = `<div class="signoff">✓ Load status sent ${esc(l.signedOffAt)}${l.signedOffBy?' · '+esc(l.signedOffBy):''}</div>`;
+    // No name here. The load publishes itself when the last van lands, so the
+    // only name available is whoever happened to inspect that van — which
+    // reads as "this person signed the load off" and is not what happened.
+    // Every van above already carries its own inspector, which is the
+    // attribution that is actually true.
+    action = `<div class="signoff">✓ Load status sent ${esc(l.signedOffAt)}</div>`;
   } else if(l.pending===0 && l.total>0){
     action = `<button class="lcomplete go" onclick="completeLoad('${esc(l.loadId)}',event)">Mark Load Inspection Complete</button>`;
   } else {
