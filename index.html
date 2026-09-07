@@ -254,6 +254,41 @@
 /* ---- integrity marker: must be the last rule in this file ---- */
 #title{ --css-ok: 1; }
 </style>
+<style>
+  /* ---- damage codes ---- */
+  .dmg{display:flex;align-items:flex-start;gap:10px;background:#12161b;
+       border:1px solid var(--line);border-radius:10px;padding:10px 11px;margin-bottom:8px}
+  .dmg-c{font:600 15px ui-monospace,SFMono-Regular,Menlo,monospace;color:#fbbf24;
+         letter-spacing:.5px;white-space:nowrap}
+  .dmg-t{flex:1;font-size:12.5px;line-height:1.35;color:var(--dim)}
+  .dmg-x{background:none;border:none;color:#6b7580;font-size:17px;line-height:1;
+         padding:0 2px;cursor:pointer}
+  .dmg.note{border-color:#2a3340}
+
+  /* ---- the code picker: full screen, thumb-sized rows ---- */
+  .picker{position:fixed;inset:0;z-index:70;background:var(--bg);
+          display:flex;flex-direction:column}
+  .picker.hide{display:none}
+  body.picking{overflow:hidden}
+  .pk-head{padding:14px 15px 10px;border-bottom:1px solid var(--line);
+           display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .pk-back{background:none;border:none;color:var(--accent);font-size:16px;
+           padding:4px 2px;cursor:pointer}
+  .pk-title{font-size:17px;font-weight:650;color:#e6ebf0}
+  .pk-step{width:100%;font-size:12px;color:var(--dim);letter-spacing:.4px;text-transform:uppercase}
+  .pk-filter{padding:10px 15px;border-bottom:1px solid var(--line)}
+  .pk-filter input{width:100%;box-sizing:border-box;background:#12161b;
+                   border:1px solid var(--line);border-radius:10px;
+                   padding:13px 12px;color:#e6ebf0;font-size:16px}
+  .pk-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:40px}
+  .pk-row{display:flex;align-items:center;gap:13px;width:100%;text-align:left;
+          background:none;border:none;border-bottom:1px solid #171c22;
+          padding:15px;color:#e6ebf0;font-size:15px;cursor:pointer}
+  .pk-row:active{background:#151a20}
+  .pk-code{font:600 15px ui-monospace,SFMono-Regular,Menlo,monospace;
+           color:#fbbf24;min-width:26px}
+  .pk-name{flex:1;line-height:1.3}
+</style>
 
 </head>
 <body>
@@ -310,7 +345,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 04 19:24";
+window.BUILD_STAMP = "Sep 07 17:49";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -469,6 +504,8 @@ let S = {
   view:'vins', sort:'bay', q:'', bayFree:false, homeYard:'',
   evalMode:false, unlocked:false, showApproved:false, nameKind:'', nameRole:'',
   pendingAction:'',            // set by an 'Approve Eval' button in Telegram
+  dmgDraft:null,               // the damage being built: {area, type, sev}
+  dmgPhotoCode:'',             // while set, photos are named for this damage
   rows:[], loads:[], counts:{}, current:null, pendingPhotos:0, confirmMissing:false,
   // Sort-by-load in the VIN tab opens every load. This holds the ones he has
   // folded shut, so a load stays closed while he works the rest of the list.
@@ -1469,9 +1506,224 @@ function foundIt(){
   });
 }
 
+
+/* ================================================================
+   DAMAGE — codes, not a yes/no
+   ================================================================
+   The old form asked "Damage?" and made him tap NO on every clean van, which
+   is a tap that says nothing: no damage recorded IS no damage. So the answer
+   is gone and what remains is a button. Tapping it walks Area, Type,
+   Severity, then photos, and lands back here with the button still lit for
+   the next one. A van carries as many as it has.
+   ================================================================ */
+
+/** The codes on the van being inspected, always an array. */
+function dmgList(r){ return (r && r.damageCodes) ? r.damageCodes : []; }
+
+/** "17-09-01" -> "QTR PANEL RIGHT, SCUFFED, LESS THAN & INCLUDING 1"" */
+function dmgText(code){
+  const t = (OPT.damageCodes)||null;
+  if(!t) return '';
+  const p = String(code||'').match(/^(\d{2})-(\d{2})-(\d{2})$/);
+  if(!p) return '';
+  const find = (list, c) => { const h=(list||[]).filter(x=>x.c===c)[0]; return h?h.n:''; };
+  const sev = find(t.severity, p[3]);
+  return [find(t.area,p[1]) || ('area '+p[1]+'?'),
+          find(t.type,p[2]) || ('type '+p[2]+'?'),
+          // only the inches half belongs in a sentence
+          (sev||('severity '+p[3]+'?')).split(' / ')[0]].join(', ');
+}
+
+function damageSection(r){
+  const codes = dmgList(r);
+  const rows = codes.map((c,i)=>`
+    \x3cdiv class="dmg">
+      \x3cdiv class="dmg-c">${esc(c)}\x3c/div>
+      \x3cdiv class="dmg-t">${esc(dmgText(c))}\x3c/div>
+      \x3cbutton class="dmg-x" onclick="removeDamage(${i})" title="Remove">✕\x3c/button>
+    \x3c/div>`).join('');
+
+  const note = (r.damageNotes||'').trim();
+  return `
+    \x3cdiv class="grp">
+      \x3cdiv class="lab">Damage${codes.length?' ('+codes.length+')':''}\x3c/div>
+      ${rows}
+      \x3cbutton class="addbtn" onclick="startDamage()">＋ Add damage\x3c/button>
+    \x3c/div>
+
+    \x3cdiv class="grp">
+      \x3cdiv class="lab">Notes\x3c/div>
+      ${note ? `\x3cdiv class="dmg note">
+                 \x3cdiv class="dmg-t" style="color:#c9d2da">${esc(note)}\x3c/div>
+                 \x3cbutton class="dmg-x" onclick="clearNote()" title="Remove">✕\x3c/button>
+               \x3c/div>` : ''}
+      \x3cbutton class="addbtn" onclick="openNote()">${note?'✎ Edit note':'＋ Add note'}\x3c/button>
+      \x3cdiv class="bayhint" style="text-align:left">Anything about the van the codes cannot say. It goes to the group with the VIN.\x3c/div>
+    \x3c/div>`;
+}
+
+function removeDamage(i){
+  const r = S.current; if(!r) return;
+  const codes = dmgList(r).slice();
+  codes.splice(i,1);
+  r.damageCodes = codes;
+  renderForm();
+}
+
+function clearNote(){
+  const r = S.current; if(!r) return;
+  r.damageNotes = '';
+  renderForm();
+}
+
+/* ---------- the note ---------- */
+function openNote(){
+  const r = S.current; if(!r) return;
+  pickerOpen(`
+    \x3cdiv class="pk-head">
+      \x3cbutton class="pk-back" onclick="pickerClose()">‹ Back\x3c/button>
+      \x3cdiv class="pk-title">Note on ${esc(r.vin.slice(-6))}\x3c/div>
+    \x3c/div>
+    \x3cdiv class="pk-body" style="padding:14px">
+      \x3ctextarea id="noteBox" style="min-height:140px"
+        placeholder="Anything about the van worth telling the group">${esc(r.damageNotes||'')}\x3c/textarea>
+      \x3cbutton class="btn pri" style="margin-top:12px" onclick="saveNote()">Save note\x3c/button>
+    \x3c/div>`);
+  setTimeout(()=>{ const b=$('noteBox'); if(b) b.focus(); }, 60);
+}
+function saveNote(){
+  const r = S.current; if(!r) return;
+  const b = $('noteBox');
+  r.damageNotes = b ? b.value.trim().slice(0,500) : '';
+  pickerClose();
+  renderForm();
+}
+
+/* ---------- the picker ----------
+   One full-screen overlay, built on demand and reused. It is not in
+   IndexShell so this whole feature lives in one file. */
+function pickerEl(){
+  let el = document.getElementById('picker');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'picker';
+    el.className = 'picker hide';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function pickerOpen(html){
+  const el = pickerEl();
+  el.innerHTML = html;
+  el.classList.remove('hide');
+  document.body.classList.add('picking');
+}
+function pickerClose(){
+  const el = document.getElementById('picker');
+  if(el){ el.classList.add('hide'); el.innerHTML=''; }
+  document.body.classList.remove('picking');
+  S.dmgDraft = null;
+}
+
+/**
+ * A filtered list of codes. The filter matches the NUMBER as well as the
+ * words, so a supervisor who knows "17" from the paper sheet types 17 and is
+ * done — and one who does not can read down the list.
+ */
+function pickerList(title, step, items, onPick){
+  const rows = items.map(o=>
+    `\x3cbutton class="pk-row" data-s="${esc((o.c+' '+o.n).toUpperCase())}"
+       onclick="${onPick}('${esc(o.c)}')">
+       \x3cspan class="pk-code">${esc(o.c)}\x3c/span>
+       \x3cspan class="pk-name">${esc(o.n)}\x3c/span>\x3c/button>`).join('');
+  pickerOpen(`
+    \x3cdiv class="pk-head">
+      \x3cbutton class="pk-back" onclick="pickerClose()">✕\x3c/button>
+      \x3cdiv class="pk-title">${esc(title)}\x3c/div>
+      \x3cdiv class="pk-step">${esc(step)}\x3c/div>
+    \x3c/div>
+    \x3cdiv class="pk-filter">
+      \x3cinput id="pkq" placeholder="Type a number or a word" oninput="pickerFilter(this.value)">
+    \x3c/div>
+    \x3cdiv class="pk-body" id="pkBody">${rows}\x3c/div>`);
+}
+function pickerFilter(q){
+  q = String(q||'').trim().toUpperCase();
+  const rows = document.querySelectorAll('#pkBody .pk-row');
+  for(let i=0;i<rows.length;i++){
+    const hit = !q || rows[i].dataset.s.indexOf(q) !== -1;
+    rows[i].style.display = hit ? '' : 'none';
+  }
+}
+
+/* ---------- the three steps ---------- */
+function startDamage(){
+  if(!OPT.damageCodes){
+    toast('The damage code tables have not loaded yet — pull to refresh once in signal.', 4000);
+    return;
+  }
+  S.dmgDraft = { area:'', type:'', sev:'' };
+  pickerList('Where is it?', 'Step 1 of 3 · Area', OPT.damageCodes.area, 'pickArea');
+}
+function pickArea(c){
+  S.dmgDraft.area = c;
+  pickerList('What is wrong with it?', 'Step 2 of 3 · Type', OPT.damageCodes.type, 'pickType');
+}
+function pickType(c){
+  S.dmgDraft.type = c;
+  pickerList('How big?', 'Step 3 of 3 · Severity', OPT.damageCodes.severity, 'pickSev');
+}
+function pickSev(c){
+  const d = S.dmgDraft;
+  d.sev = c;
+  const code = d.area + '-' + d.type + '-' + d.sev;
+  const r = S.current;
+  if(!r) return pickerClose();
+
+  if(dmgList(r).indexOf(code) !== -1){
+    toast(code + ' is already recorded on this van', 3000);
+    return pickerClose();
+  }
+
+  r.damageCodes = dmgList(r).concat([code]);
+  // Photos of THIS damage are named with its code, so the file in Drive says
+  // which damage it belongs to without any extra bookkeeping.
+  S.dmgPhotoCode = code;
+  damagePhotoStep(code);
+}
+
+/**
+ * The last step: photograph it. Deliberately not skippable by accident — the
+ * code says what happened, the photo proves it, and an OEM claim needs both.
+ */
+function damagePhotoStep(code){
+  pickerOpen(`
+    \x3cdiv class="pk-head">
+      \x3cdiv class="pk-title">${esc(code)}\x3c/div>
+      \x3cdiv class="pk-step">${esc(dmgText(code))}\x3c/div>
+    \x3c/div>
+    \x3cdiv class="pk-body" style="padding:14px">
+      \x3cdiv class="lab">Photograph this damage\x3c/div>
+      \x3cdiv class="photos" id="dmgGrid">\x3c/div>
+      \x3cinput type="file" id="dmgFile" accept="image/\x2a" capture="environment" multiple
+             class="hide" onchange="handleFiles(this.files)">
+      ${cameraSupported() ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>' : ''}
+      \x3cbutton class="addbtn" style="margin-top:8px"
+              onclick="document.getElementById('dmgFile').click()">🖼 Add from gallery\x3c/button>
+      \x3cbutton class="btn pri" style="margin-top:14px" onclick="finishDamage()">Done\x3c/button>
+      \x3cdiv class="bayhint" style="text-align:left">Photos send themselves in the background — you do not have to wait.\x3c/div>
+    \x3c/div>`);
+}
+
+function finishDamage(){
+  S.dmgPhotoCode = '';
+  pickerClose();
+  renderForm();
+}
+
 /** Damage, or a VIN discrepancy, both need a picture. */
 function needsPhotos(r){
-  return r.damage==='YES' ||
+  return (r.damageCodes||[]).length > 0 ||
          r.monroney==='VIN DISCREPANCY' || r.gatepass==='VIN DISCREPANCY';
 }
 function photoWhy(r){
@@ -1536,15 +1788,7 @@ function renderForm(){
       \x3cdiv>\x3cdiv class="lab">AC\x3c/div>${seg('ac',OPT.ac,v=>v==='NO'?'no':'ok')}\x3c/div>
     \x3c/div>
 
-    \x3cdiv class="grp">\x3cdiv class="lab">Damage\x3c/div>${seg('damage',OPT.damage,dmgStyle)}\x3c/div>
-
-    \x3cdiv class="${r.damage==='YES'?'':'hide'}">
-      \x3cdiv class="grp">
-        \x3cdiv class="lab">Damage notes\x3c/div>
-        \x3ctextarea id="notes" placeholder="What and where — e.g. dent driver rear quarter"
-                  oninput="setText('damageNotes',this.value)">${esc(r.damageNotes||'')}\x3c/textarea>
-      \x3c/div>
-    \x3c/div>
+    ${damageSection(r)}
 
     \x3cdiv id="photoBlock" class="${needsPhotos(r)?'':'hide'}">
       \x3cdiv class="grp">
@@ -1578,7 +1822,10 @@ window.__P3 = 1;
 <script>
 
 /* ---------- photos ---------- */
-function handleFiles(files){ [].slice.call(files).forEach(uploadOne); $('file').value=''; }
+function handleFiles(files){
+  [].slice.call(files).forEach(uploadOne);
+  ['file','dmgFile'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+}
 
 /* ==================================================================
    PHOTOS NEVER BLOCK ANYTHING
@@ -1603,12 +1850,13 @@ function uploadOne(file){
 
 /** The placeholder tile a photo lives in until it reaches Drive. */
 function newTile(){
-  const grid = $('photoGrid');
-  const ph = document.createElement('div');
-  ph.className = 'ph';
-  ph.innerHTML = '\x3cdiv style="display:grid;place-items:center;height:100%">\x3cspan class="spin">\x3c/span>\x3c/div>';
-  if(grid) grid.appendChild(ph);
-  return ph;
+  // While the damage step is open its own grid is the one on screen.
+  const grid = document.getElementById('dmgGrid') || $('photoGrid');
+  const d = document.createElement('div');
+  d.className = 'ph';
+  d.innerHTML = '\x3cspan class="spin">\x3c/span>';
+  if(grid) grid.appendChild(d);
+  return d;
 }
 
 /**
@@ -1629,7 +1877,10 @@ function sendPhoto_(dataUrl, name, ph, vin){
   ph.innerHTML = '\x3cimg src="' + dataUrl + '" style="opacity:.45">';
   // A name of our own making, so a photo re-sent after a timeout is
   // recognised on the server as the one already filed rather than a second copy.
-  const unique = vin + '_' + Date.now() + '_' +
+  // While a damage is being recorded its code goes in the name, so the file in
+  // Drive says which damage it belongs to with no extra bookkeeping.
+  const code = S.dmgPhotoCode ? (S.dmgPhotoCode + '_') : '';
+  const unique = vin + '_' + code + Date.now() + '_' +
                  Math.random().toString(36).slice(2, 7) + '.jpg';
 
   enqueuePhoto(vin, dataUrl, unique,
@@ -1705,7 +1956,6 @@ function save(complete){
     if(!r.lifted) missing.push('lifted');
     if(!r.roof) missing.push('roof');
     if(!r.ac) missing.push('AC');
-    if(!r.damage) missing.push('damage');
     if(missing.length){ toast('Still needed: '+missing.join(', '), 3500); return; }
     // Photos no longer hold this up. They are queued ahead of this save, so
     // they reach Drive first and the group's alert still carries them.
