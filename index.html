@@ -289,6 +289,17 @@
            color:#fbbf24;min-width:26px}
   .pk-name{flex:1;line-height:1.3}
 </style>
+<style>
+  /* ---- one damage, with its own evidence under it ---- */
+  .dmod{background:#12161b;border:1px solid var(--line);border-radius:11px;
+        padding:11px 12px 9px;margin-bottom:10px}
+  .dmod.noproof{border-color:#5b3a17}
+  .dmod-h{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
+  .dmod-p{margin-top:10px;min-height:56px;cursor:pointer}
+  .dmod .ph.add{display:flex;align-items:center;justify-content:center;
+                border:1px dashed #39414c;background:none;color:#6b7580;font-size:20px}
+  .dmod-warn{margin-top:8px;font-size:11.5px;font-weight:700;color:#fbbf24;letter-spacing:.3px}
+</style>
 
 </head>
 <body>
@@ -345,7 +356,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 07 17:49";
+window.BUILD_STAMP = "Sep 07 22:33";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -505,7 +516,7 @@ let S = {
   evalMode:false, unlocked:false, showApproved:false, nameKind:'', nameRole:'',
   pendingAction:'',            // set by an 'Approve Eval' button in Telegram
   dmgDraft:null,               // the damage being built: {area, type, sev}
-  dmgPhotoCode:'',             // while set, photos are named for this damage
+  dmgPhotoCode:'',             // photos taken now belong to this damage
   rows:[], loads:[], counts:{}, current:null, pendingPhotos:0, confirmMissing:false,
   // Sort-by-load in the VIN tab opens every load. This holds the ones he has
   // folded shut, so a load stays closed while he works the rest of the list.
@@ -1534,14 +1545,46 @@ function dmgText(code){
           (sev||('severity '+p[3]+'?')).split(' / ')[0]].join(', ');
 }
 
+/** Photos already filed against one damage. */
+function dmgShots(r, code){
+  const m = (r && r.damagePhotos) || {};
+  return m[code] || [];
+}
+/** Photos taken for one damage that have not been sent yet. */
+function dmgPending(code){
+  try { return outbox().filter(e => e.fn==='apiUploadPhoto' && e.code===code).length; }
+  catch(e){ return 0; }
+}
+/** Everything that counts as proof of this damage, sent or not. */
+function dmgProof(r, code){ return dmgShots(r,code).length + dmgPending(code); }
+
 function damageSection(r){
   const codes = dmgList(r);
-  const rows = codes.map((c,i)=>`
-    \x3cdiv class="dmg">
-      \x3cdiv class="dmg-c">${esc(c)}\x3c/div>
-      \x3cdiv class="dmg-t">${esc(dmgText(c))}\x3c/div>
-      \x3cbutton class="dmg-x" onclick="removeDamage(${i})" title="Remove">✕\x3c/button>
-    \x3c/div>`).join('');
+
+  /* One module per damage: the code, what it means, and the pictures that
+     prove it directly underneath. A damage and its evidence read as one
+     thing, which is how anyone looking at it thinks about it. */
+  const rows = codes.map((c,i)=>{
+    const shots   = dmgShots(r,c);
+    const pending = dmgPending(c);
+    const proof   = shots.length + pending;
+    const tiles = shots.map(u =>
+        `\x3ca href="${esc(u)}" target="_blank">\x3cimg src="${esc(thumb(u))}" loading="lazy">\x3c/a>`).join('') +
+      Array(pending).fill('\x3cdiv class="ph">\x3cspan class="spin">\x3c/span>\x3c/div>').join('');
+
+    return `
+    \x3cdiv class="dmod ${proof?'':'noproof'}">
+      \x3cdiv class="dmod-h" onclick="openDamage('${esc(c)}')">
+        \x3cdiv class="dmg-c">${esc(c)}\x3c/div>
+        \x3cdiv class="dmg-t">${esc(dmgText(c))}\x3c/div>
+        \x3cbutton class="dmg-x" onclick="removeDamage(${i},event)" title="Remove">✕\x3c/button>
+      \x3c/div>
+      \x3cdiv class="photos dmod-p" onclick="openDamage('${esc(c)}')">${tiles}
+        \x3cdiv class="ph add">＋\x3c/div>
+      \x3c/div>
+      ${proof ? '' : '\x3cdiv class="dmod-warn">Needs a photo\x3c/div>'}
+    \x3c/div>`;
+  }).join('');
 
   const note = (r.damageNotes||'').trim();
   return `
@@ -1562,12 +1605,22 @@ function damageSection(r){
     \x3c/div>`;
 }
 
-function removeDamage(i){
+function removeDamage(i, e){
+  if(e) e.stopPropagation();            // the row itself opens the damage
   const r = S.current; if(!r) return;
   const codes = dmgList(r).slice();
-  codes.splice(i,1);
+  const gone = codes.splice(i,1)[0];
   r.damageCodes = codes;
+  // Its pictures go with it. Leaving them would file photos against a damage
+  // that is no longer recorded.
+  if(r.damagePhotos && gone) delete r.damagePhotos[gone];
   renderForm();
+}
+
+/** Reopen a damage to add pictures to it. */
+function openDamage(code){
+  S.dmgPhotoCode = code;
+  damagePhotoStep(code);
 }
 
 function clearNote(){
@@ -1686,32 +1739,38 @@ function pickSev(c){
   }
 
   r.damageCodes = dmgList(r).concat([code]);
-  // Photos of THIS damage are named with its code, so the file in Drive says
-  // which damage it belongs to without any extra bookkeeping.
   S.dmgPhotoCode = code;
   damagePhotoStep(code);
 }
 
 /**
- * The last step: photograph it. Deliberately not skippable by accident — the
- * code says what happened, the photo proves it, and an OEM claim needs both.
+ * Photograph this damage. Done is ALWAYS available — forgetting a picture
+ * here is not worth trapping anyone over, and the van cannot be marked
+ * inspected until every damage has one anyway. That check happens once, at
+ * the end, and sends him back to whichever damage is short.
+ *
+ * Photos taken here are tagged with the code, so they belong to this damage
+ * rather than to the van in general.
  */
 function damagePhotoStep(code){
+  const r = S.current;
   pickerOpen(`
     \x3cdiv class="pk-head">
+      \x3cbutton class="pk-back" onclick="finishDamage()">‹ Back\x3c/button>
       \x3cdiv class="pk-title">${esc(code)}\x3c/div>
       \x3cdiv class="pk-step">${esc(dmgText(code))}\x3c/div>
     \x3c/div>
     \x3cdiv class="pk-body" style="padding:14px">
       \x3cdiv class="lab">Photograph this damage\x3c/div>
-      \x3cdiv class="photos" id="dmgGrid">\x3c/div>
+      \x3cdiv class="photos" id="dmgGrid">${
+        dmgShots(r,code).map(u=>`\x3ca href="${esc(u)}" target="_blank">\x3cimg src="${esc(thumb(u))}">\x3c/a>`).join('')
+      }\x3c/div>
       \x3cinput type="file" id="dmgFile" accept="image/\x2a" capture="environment" multiple
              class="hide" onchange="handleFiles(this.files)">
       ${cameraSupported() ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>' : ''}
       \x3cbutton class="addbtn" style="margin-top:8px"
               onclick="document.getElementById('dmgFile').click()">🖼 Add from gallery\x3c/button>
       \x3cbutton class="btn pri" style="margin-top:14px" onclick="finishDamage()">Done\x3c/button>
-      \x3cdiv class="bayhint" style="text-align:left">Photos send themselves in the background — you do not have to wait.\x3c/div>
     \x3c/div>`);
 }
 
@@ -1721,10 +1780,12 @@ function finishDamage(){
   renderForm();
 }
 
+
 /** Damage, or a VIN discrepancy, both need a picture. */
+/* Damage pictures live in their own module now, so the block at the bottom
+   of the form is only for a document that does not match the van. */
 function needsPhotos(r){
-  return (r.damageCodes||[]).length > 0 ||
-         r.monroney==='VIN DISCREPANCY' || r.gatepass==='VIN DISCREPANCY';
+  return r.monroney==='VIN DISCREPANCY' || r.gatepass==='VIN DISCREPANCY';
 }
 function photoWhy(r){
   const d=[];
@@ -1850,7 +1911,7 @@ function uploadOne(file){
 
 /** The placeholder tile a photo lives in until it reaches Drive. */
 function newTile(){
-  // While the damage step is open its own grid is the one on screen.
+  // The damage step has its own grid while it is open.
   const grid = document.getElementById('dmgGrid') || $('photoGrid');
   const d = document.createElement('div');
   d.className = 'ph';
@@ -1877,13 +1938,14 @@ function sendPhoto_(dataUrl, name, ph, vin){
   ph.innerHTML = '\x3cimg src="' + dataUrl + '" style="opacity:.45">';
   // A name of our own making, so a photo re-sent after a timeout is
   // recognised on the server as the one already filed rather than a second copy.
-  // While a damage is being recorded its code goes in the name, so the file in
-  // Drive says which damage it belongs to with no extra bookkeeping.
-  const code = S.dmgPhotoCode ? (S.dmgPhotoCode + '_') : '';
-  const unique = vin + '_' + code + Date.now() + '_' +
+  // A photo taken inside a damage carries that code — in the filename, so Drive
+  // is self-describing, and on the queue entry, so the app can show it under
+  // the right damage while it is still waiting to send.
+  const code = S.dmgPhotoCode || '';
+  const unique = vin + '_' + (code ? code + '_' : '') + Date.now() + '_' +
                  Math.random().toString(36).slice(2, 7) + '.jpg';
 
-  enqueuePhoto(vin, dataUrl, unique,
+  enqueuePhoto(vin, dataUrl, unique, code,
     smaller => { ph.innerHTML = '\x3cimg src="' + smaller + '" style="opacity:.45">'; },
     id => {
       if(!id){ ph.remove(); return; }
@@ -1901,13 +1963,24 @@ function sendPhoto_(dataUrl, name, ph, vin){
 function photoLanded(entry, res){
   const ph = document.querySelector('[data-q="' + entry.id + '"]');
   if(!res){
-    if(ph) ph.innerHTML =
-      '\x3cdiv style="color:#f87171;font-size:11px;padding:6px;text-align:center">Not saved\x3cbr>take it again\x3c/div>';
+    if(ph){
+      // Marked so the damage step stops counting it. A photo that did not
+      // save is not a photo, and Done must go back to being unavailable.
+      ph.classList.add('bad');
+      ph.innerHTML =
+        '\x3cdiv style="color:#f87171;font-size:11px;padding:6px;text-align:center">Not saved\x3cbr>take it again\x3c/div>';
+    }
     return;
   }
   if(S.current && S.current.vin === entry.vin){
     S.current.photoCount = res.count;
     S.current.photoLinks = (S.current.photoLinks || []).concat([res.url]);
+    // File it against the damage it was taken for.
+    if(entry.code){
+      const m = S.current.damagePhotos || (S.current.damagePhotos = {});
+      m[entry.code] = (m[entry.code] || []).concat([res.url]);
+      if(!document.getElementById('dmgGrid')) renderForm();   // back on the form
+    }
   }
   if(ph){
     ph.outerHTML = '\x3ca href="' + res.url + '" target="_blank">\x3cimg src="' +
@@ -1948,6 +2021,8 @@ function save(complete){
     toast('…'+r.vin.slice(-6)+' is already recorded as MISSING', 2600);
     return backToList();
   }
+  const waiting = outbox().filter(e => e.fn==='apiUploadPhoto' && e.vin===r.vin).length;
+
   if(complete){
     const missing=[];
     if(!(r.bayActual||'').trim()) missing.push('full bay location');
@@ -1957,10 +2032,22 @@ function save(complete){
     if(!r.roof) missing.push('roof');
     if(!r.ac) missing.push('AC');
     if(missing.length){ toast('Still needed: '+missing.join(', '), 3500); return; }
-    // Photos no longer hold this up. They are queued ahead of this save, so
-    // they reach Drive first and the group's alert still carries them.
+
+    /* Damage without a picture is worth nothing to an OEM claim, so this is
+       the one thing that stops a van being marked inspected — and it is
+       checked per damage, not per van. Three dents and one photo is not
+       three photographed dents.
+
+       A photo still in the queue counts. It has been taken; making him wait
+       for a dead zone to clear would undo the whole offline design. */
+    const bare = (r.damageCodes||[]).filter(c => dmgProof(r, c) === 0);
+    if(bare.length){
+      toast(bare[0] + ' has no photo' +
+            (bare.length > 1 ? ' (' + bare.length + ' damages need one)' : '') +
+            '.\nTap it to add one.', 5000);
+      return;
+    }
   }
-  const waiting = outbox().filter(e => e.fn==='apiUploadPhoto' && e.vin===r.vin).length;
   const btn = complete ? $('doneBtn') : null;
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving'; }
 
@@ -2210,11 +2297,13 @@ function enqueue(entry){
  *                                     the thumbnail on screen matches
  * @param {function(string)} done      the queue id, or '' if it could not be kept
  */
-function enqueuePhoto(vin, dataUrl, name, onShrunk, done){
+function enqueuePhoto(vin, dataUrl, name, code, onShrunk, done){
   const steps = [null, {px:1200, q:0.6}, {px:900, q:0.45}];   // null = as taken
 
   const attempt = (i, url) => {
-    const id = enqueue({ fn:'apiUploadPhoto', args:[vin, url, name], vin:vin });
+    // `code` rides along so the app can show a photo under the right damage
+    // while it is still waiting to send. The server never sees it.
+    const id = enqueue({ fn:'apiUploadPhoto', args:[vin, url, name], vin:vin, code:code||'' });
     if(id){ if(i > 0) onShrunk && onShrunk(url); return done(id); }
 
     if(i + 1 >= steps.length){
