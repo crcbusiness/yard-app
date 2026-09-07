@@ -300,6 +300,20 @@
                 border:1px dashed #39414c;background:none;color:#6b7580;font-size:20px}
   .dmod-warn{margin-top:8px;font-size:11.5px;font-weight:700;color:#fbbf24;letter-spacing:.3px}
 </style>
+<style>
+  /* TESTING decision buttons — deliberately set apart from the real bar */
+  #testBtns:empty{display:none}
+  #testBtns{flex-basis:100%}
+  .testwrap{margin-top:10px;padding-top:9px;border-top:2px dashed #7c4a12}
+  /* the bar is taller with these in it — let the form scroll clear */
+  body.hastest main{padding-bottom:230px}
+  .testlab{font:800 10px/1 inherit;letter-spacing:1.4px;color:#f59e0b;
+           text-align:center;margin-bottom:8px}
+  .tbtn{width:100%;min-height:46px;margin-top:7px;border-radius:9px;border:1px solid;
+        font-size:14.5px;font-weight:700;background:transparent}
+  .tbtn.ok{border-color:#1f6b4a;color:#4ade80}
+  .tbtn.ev{border-color:#2a4a6b;color:#7dd3fc}
+</style>
 
 </head>
 <body>
@@ -356,7 +370,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 07 22:33";
+window.BUILD_STAMP = "Sep 07 23:45";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -1870,6 +1884,63 @@ function renderForm(){
        \x3cbutton class="btn pri" id="saveEditsBtn" onclick="saveEdits()">Mark Inspected\x3c/button>`
     : `\x3cbutton class="btn sec" onclick="save(false)">Save draft\x3c/button>
        \x3cbutton class="btn pri" id="doneBtn" onclick="save(true)">Mark Inspected\x3c/button>`;
+
+  // $('bottom').innerHTML above replaces the bar wholesale, so the testing
+  // block is rebuilt after it rather than before.
+  paintTestButtons(r);
+}
+
+/* ================================================================
+   TESTING — the two decision buttons
+   ================================================================
+   These will eventually REPLACE Mark Inspected for a van with issues:
+   finishing such a van is one act, not two, and the decision is taken by the
+   person standing at it. While that is being proved they sit underneath the
+   normal bar, plainly labelled, so the yard can keep working exactly as it
+   does today and nothing changes for anyone who does not press them.
+
+   Each one marks the van inspected AND records the decision in the same
+   save, so there is one row written and one message sent.
+   ================================================================ */
+function paintTestButtons(r){
+  /* Inside the bar, under the two real buttons — not after it. Both are fixed
+     to the bottom of the screen, so a separate block there simply covers Mark
+     Inspected, which is how this first went wrong. */
+  const bar = document.getElementById('bottom');
+  if(!bar) return;
+  let host = document.getElementById('testBtns');
+  if(!host){
+    host = document.createElement('div');
+    host.id = 'testBtns';
+    bar.appendChild(host);
+  }
+
+  // Only where a decision means anything: a van with something wrong with it,
+  // still being inspected.
+  const issues = (r.damageCodes||[]).length ||
+                 (r.damageNotes||'').trim() ||
+                 r.monroney==='MISSING' || r.monroney==='VIN DISCREPANCY' ||
+                 r.gatepass==='MISSING' || r.gatepass==='VIN DISCREPANCY';
+  if(!issues || (S.evalMode && !S.unlocked) || r.status==='MISSING'){
+    host.innerHTML = '';
+    document.body.classList.remove('hastest');
+    return;
+  }
+  // The bar is taller now, so the form needs room to scroll clear of it.
+  document.body.classList.add('hastest');
+
+  host.innerHTML = `
+    \x3cdiv class="testwrap">
+      \x3cdiv class="testlab">TESTING — DO NOT PRESS\x3c/div>
+      \x3cbutton class="btn tbtn ok" onclick="decide('APPROVED')">Approve Shipping (CRC)\x3c/button>
+      \x3cbutton class="btn tbtn ev" onclick="decide('REQUESTED')">Send Evaluation to (AWC)\x3c/button>
+    \x3c/div>`;
+}
+
+/** Mark inspected and record the decision, in one save. */
+function decide(action){
+  if(!S.current) return;
+  save(true, action);
 }
 
 function backToList(){ closeApprove(); S.current=null; S.confirmMissing=false;
@@ -2014,7 +2085,7 @@ function shrinkDataUrl(dataUrl, maxPx, quality){
 }
 
 /* ---------- save ---------- */
-function save(complete){
+function save(complete, evalAction){
   const r=S.current;
   // A van nobody could find has no checklist to validate.
   if(complete && r.status==='MISSING'){
@@ -2054,12 +2125,18 @@ function save(complete){
   const localFresh = Object.assign({}, r, {
     status: complete ? 'DONE' : (r.status==='PENDING' ? 'IN PROGRESS' : r.status),
     inspectedBy: me(),
-    inspectedAt: nowStamp()          // when he inspected it, not when it reached the server
+    inspectedAt: nowStamp(),         // when he inspected it, not when it reached the server
+    // The decision, if one was taken, so the list reads right before the
+    // server has heard about it.
+    evalStatus: evalAction || r.evalStatus || '',
+    approvedBy: evalAction==='APPROVED' ? me() : (r.approvedBy||''),
+    evalRequestedBy: evalAction==='REQUESTED' ? me() : (r.evalRequestedBy||'')
   });
 
   mutate({
     fn:'apiSave', vin:r.vin,
-    args:[Object.assign({}, r, {complete: !!complete, actor: me()})],
+    args:[Object.assign({}, r, {complete: !!complete, actor: me(),
+                                evalAction: evalAction || ''})],
     ok:(server, queued)=>{
       const fresh = queued ? localFresh : server;
       if(queued) patchLocal(fresh.vin, localFresh);
@@ -2071,6 +2148,8 @@ function save(complete){
         if(waiting) msg = tail+' complete · '+waiting+' photo'+(waiting===1?'':'s')+
                           ' still to send — you can carry on';
         else if(queued) msg = tail+' complete — waiting for signal';
+        else if(evalAction==='APPROVED')  msg = tail+' — approved for shipping';
+        else if(evalAction==='REQUESTED') msg = tail+' — evaluation sent';
         else msg = 'Saved — '+tail+' complete';
         toast(msg, (waiting||queued) ? 4000 : 2200);
         setTimeout(backToList,420);
