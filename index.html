@@ -378,11 +378,11 @@
    Telegram Mini App shell.
    Paste your Apps Script /exec URL below — that is the only edit needed.
    ===================================================================== */
-const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-FVhW-yIC0Iw3NYHnZ0AII0SSgqFqI-_wHjWejqfDYB0G6g/exec";
+const API_URL = "PASTE_YOUR_EXEC_URL_HERE";
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 00:14";
+window.BUILD_STAMP = "Sep 08 00:41";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -2161,9 +2161,18 @@ function save(complete, evalAction){
                           ' still to send — you can carry on';
         else if(queued) msg = tail+' complete — waiting for signal';
         else if(evalAction==='APPROVED')  msg = tail+' — approved for shipping';
-        else if(evalAction==='REQUESTED') msg = tail+' — evaluation sent';
+        else if(evalAction==='REQUESTED'){
+          /* Only claim the email went if the server says it did. It sends the
+             request before it answers, so by the time this runs the answer is
+             known — and a supervisor who walks away believing AWC has the unit
+             when they do not is worse than one extra tap. */
+          const em = String((server && server.evalEmail) || '');
+          msg = (em && em.indexOf('NOT SENT') !== 0)
+              ? tail+' — evaluation emailed to AWC'
+              : tail+' — evaluation raised, but the email did NOT go out';
+        }
         else msg = 'Saved — '+tail+' complete';
-        toast(msg, (waiting||queued) ? 4000 : 2200);
+        toast(msg, /did NOT go/.test(msg) ? 7000 : ((waiting||queued) ? 4000 : 2200));
         setTimeout(backToList,420);
       } else {
         saveDraft(fresh.vin, fresh);
