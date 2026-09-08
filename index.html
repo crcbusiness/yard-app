@@ -303,10 +303,15 @@
 <style>
   /* TESTING decision buttons — deliberately set apart from the real bar */
   #testBtns:empty{display:none}
-  #testBtns{flex-basis:100%}
-  .testwrap{margin-top:10px;padding-top:9px;border-top:2px dashed #7c4a12}
+  /* The bar is a flex ROW. Without wrapping, the testing block becomes a
+     third column and squeezes Save draft and Mark Inspected into narrow
+     towers. It has to take a line of its own, underneath, leaving the two
+     real buttons exactly as they were. */
+  body.hastest .bar-bottom{flex-wrap:wrap}
+  #testBtns{flex:0 0 100%;width:100%;order:2}
+  .testwrap{margin-top:12px;padding-top:10px;border-top:2px dashed #7c4a12}
   /* the bar is taller with these in it — let the form scroll clear */
-  body.hastest main{padding-bottom:230px}
+  body.hastest main{padding-bottom:250px}
   .testlab{font:800 10px/1 inherit;letter-spacing:1.4px;color:#f59e0b;
            text-align:center;margin-bottom:8px}
   .tbtn{width:100%;min-height:46px;margin-top:7px;border-radius:9px;border:1px solid;
@@ -370,7 +375,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 07 23:45";
+window.BUILD_STAMP = "Sep 08 00:02";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
