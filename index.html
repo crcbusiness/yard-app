@@ -23,6 +23,12 @@
   .hrow{display:flex;align-items:center;gap:10px}
   h1{font-size:17px;margin:0;font-weight:650;flex:1}
   .who{font-size:11px;color:var(--dim);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* While work is queued this strip stops being a name and becomes the status.
+     Wider, because a count needs less room than a name but must not clip, and
+     coloured so it reads as active rather than as a label. */
+  .who.sync{max-width:none;color:#93c5fd;font-weight:700;font-size:12px;
+            display:flex;align-items:center;gap:6px;cursor:pointer}
+  .who.sync.off{color:#fbbf24}
   .icon{background:none;border:none;color:var(--dim);font-size:19px;padding:2px 4px}
   .tabs{display:flex;gap:6px;margin-top:10px}
   .tab{flex:1;padding:9px 4px;border:1px solid var(--line);background:transparent;color:var(--dim);
@@ -191,7 +197,8 @@
   .addbtn{width:100%;min-height:var(--tap);border:1px dashed var(--line);background:transparent;
           color:var(--accent);border-radius:10px;font-size:15px;font-weight:600;margin-top:10px}
 
-  .bar-bottom{position:fixed;left:0;right:0;bottom:0;background:#0f1115f5;border-top:1px solid var(--line);
+  .bar-bottom{position:fixed;left:0;right:0;bottom:0;
+        background:#0f1115f5;border-top:1px solid var(--line);
         padding:10px 14px calc(10px + env(safe-area-inset-bottom));display:flex;gap:9px;z-index:30}
   .btn{flex:1;min-height:var(--tap);border-radius:11px;border:none;font-size:16px;font-weight:700}
   .btn.sec{background:var(--card);color:var(--txt);border:1px solid var(--line)}
@@ -375,7 +382,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 00:02";
+window.BUILD_STAMP = "Sep 08 00:14";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -2605,40 +2612,47 @@ function flushOutbox(){
    closed and sends itself on the next open, so nagging him every time he
    leaves the app with a photo outstanding would cost more than it saves. */
 function paintSync(){
-  let el = document.getElementById('syncbar');
+  /* The status lives in the header, over the name.
+     It used to be a bar across the bottom of the screen — a whole strip of a
+     small phone, permanently in the way of the buttons, and something else to
+     keep out from under them. The header is always on screen whether he is on
+     the list or inside a van, and the name it covers is one he already knows.
+     When the queue empties the name comes back. */
+  const el = document.querySelector('.who');
+  if(!el) return;
   const n = outboxCount();
-  if(!n){ if(el) el.remove(); return; }
 
-  if(!el){
-    el = document.createElement('div');
-    el.id = 'syncbar';
-    el.style.cssText =
-      'position:fixed;left:0;right:0;bottom:0;z-index:60;padding:9px 14px;' +
-      'font:13px/1.35 system-ui,-apple-system,sans-serif;font-weight:600;' +
-      'display:flex;align-items:center;justify-content:space-between;gap:10px;' +
-      'padding-bottom:calc(9px + env(safe-area-inset-bottom))';
-    document.body.appendChild(el);
+  // Anything left behind by the old bottom bar.
+  const old = document.getElementById('syncbar');
+  if(old) old.remove();
+  document.documentElement.style.setProperty('--syncH', '0px');
+
+  if(!n){
+    el.classList.remove('sync', 'off');
+    paintMe();                       // back to who is inspecting
+    return;
   }
-  // The save buttons live at the bottom of a form. Sit above them, not on top.
-  const bar = document.getElementById('bottom');
-  const lift = (bar && !bar.classList.contains('hide')) ? bar.offsetHeight : 0;
-  el.style.bottom = lift + 'px';
 
-  // Name what is waiting. "3 photos" is reassuring in a way "3 changes" is not.
   const photos = queuedPhotoCount();
   const other  = n - photos;
-  const bits = [];
-  if(photos) bits.push(photos + (photos === 1 ? ' photo' : ' photos'));
-  if(other)  bits.push(other + (other === 1 ? ' inspection' : ' inspections'));
+  const off    = navigator.onLine === false;
 
-  const off = navigator.onLine === false;
-  el.style.background = off ? '#78350f' : '#1e3a8a';
-  el.style.color = '#fff';
-  el.innerHTML =
-    '<span>' + (off ? 'No signal — ' : 'Sending — ') + bits.join(' + ') +
-    ' held on this phone</span>' + (off ? '' : '<span class="spin"></span>');
+  /* Short enough for a header. Photos are what actually take time, so they
+     get named; everything else is counted. Tapping still says exactly what
+     is waiting, which is where the detail belongs. */
+  let label;
+  if(photos && other)  label = photos + ' photo' + (photos===1?'':'s') + ' + ' + other;
+  else if(photos)      label = photos + ' photo' + (photos===1?'':'s');
+  else                 label = other + ' to send';
+
+  el.classList.add('sync');
+  el.classList.toggle('off', off);
+  el.innerHTML = (off ? '⚠ ' : '') + esc(label) +
+                 (off ? '' : ' <span class="spin"></span>');
+  el.title = off ? 'No signal — held on this phone' : 'Sending in the background';
+
   // Tap: say exactly what is waiting and how long it has been, then try again.
-  // Otherwise "3 photos held" is all anyone can ever know about a stuck queue.
+  // Otherwise "3 photos" is all anyone can ever know about a stuck queue.
   el.onclick = () => {
     const q = outbox();
     const name = { apiUploadPhoto:'photo', apiSave:'inspection',
@@ -2805,9 +2819,17 @@ if (tg) {
   const _toast = toast;
   toast = function (m, ms) { buzz('impactOccurred'); return _toast(m, ms); };
 
-  // Tapping the name does nothing here — identity is Telegram's, not typed.
-  const who = document.querySelector('.who');
-  if (who) who.onclick = null;
+  /* Tapping the name does nothing here — identity is Telegram's, not typed.
+     paintMe() runs again every time the sync status clears, so this has to
+     wrap it rather than fire once at boot, or the "Who is inspecting?" prompt
+     comes back the first time a photo finishes sending. */
+  const _paintMe = paintMe;
+  paintMe = function () {
+    _paintMe();
+    const who = document.querySelector('.who');
+    if (who && !who.classList.contains('sync')) who.onclick = null;
+  };
+  paintMe();
 
   // Fullscreen mode overlaps the status bar; keep the header clear of it.
   const inset = () => {
