@@ -378,11 +378,11 @@
    Telegram Mini App shell.
    Paste your Apps Script /exec URL below — that is the only edit needed.
    ===================================================================== */
-const API_URL = "PASTE_YOUR_EXEC_URL_HERE";
+const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-FVhW-yIC0Iw3NYHnZ0AII0SSgqFqI-_wHjWejqfDYB0G6g/exec";
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 00:41";
+window.BUILD_STAMP = "Sep 08 03:50";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -434,6 +434,20 @@ function paintRoles() {
  * The body is still JSON; the server parses it by hand.
  */
 function callApi(fn, args, ok, fail) {
+  /* A build that went out with the placeholder still in it POSTs to its own
+     host instead of Apps Script, and the host answers "405 Not Allowed" — an
+     HTML page, so it reads as a lost connection and the app just keeps
+     retrying against a wall. Say what it actually is.
+
+     Kept in the CONNECTION class on purpose: that is what makes the outbox
+     hold the supervisor's work instead of throwing it away. */
+  if (API_URL.indexOf('PASTE_YOUR') !== -1) {
+    fail({ message: 'CONNECTION: this build has no server URL in it. ' +
+                    'The API_URL line near the top of index.html was never ' +
+                    'filled in — put the Apps Script web app address there.' });
+    return;
+  }
+
   /* Every call records what actually came back, because when this fails it
      fails on a phone in a yard where nobody can open a console. NET holds the
      last answer: status, content type, how long, and the first scrap of the
