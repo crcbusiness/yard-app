@@ -390,7 +390,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 16:13";
+window.BUILD_STAMP = "Sep 08 17:16";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -894,7 +894,11 @@ function loadCard(l){
     // reads as "this person signed the load off" and is not what happened.
     // Every van above already carries its own inspector, which is the
     // attribution that is actually true.
-    action = `<div class="signoff">✓ Load status sent ${esc(l.signedOffAt)}</div>`;
+    /* "Closed", not "status sent". A load whose vans all shipped before
+       anyone walked them is recorded as finished but deliberately never
+       announced, so claiming a message went out would be false on exactly the
+       loads this status was built for. "Closed" is true either way. */
+    action = `<div class="signoff">✓ Load closed ${esc(l.signedOffAt)}</div>`;
   } else if(l.pending===0 && l.total>0){
     action = `<button class="lcomplete go" onclick="completeLoad('${esc(l.loadId)}',event)">Mark Load Inspection Complete</button>`;
   } else {
