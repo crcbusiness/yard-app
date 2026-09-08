@@ -61,6 +61,7 @@
   .p-DONE{background:#0d3327;color:#34d399}
   .p-MISSING{background:#3d2a12;color:#fbbf24;border:1px solid #7c5a1e}
   .p-REMOVED{background:#2a2e37;color:#98a2b3}
+  .p-SHIPPED{background:#2a2e37;color:#98a2b3;border:1px solid #454c58}
   .p-OFFSITE{background:#33291a;color:#d9a441}
   .p-DAMAGE{background:#3d1414;color:#f87171}
   .p-REQUESTED{background:#12304a;color:#7dd3fc}
@@ -121,6 +122,7 @@
   .c-pending{background:#4a3a10;color:#fcd34d}
   .c-ready{background:#0f3d2e;color:#4ade80}
   .c-missing{background:#4a3512;color:#fbbf24}
+  .c-shipped{background:#2a2e37;color:#98a2b3}
   .c-damage{background:#4a1717;color:#fca5a5}
   .c-info{background:var(--card2);color:#b3bcc6;font-weight:600;letter-spacing:.2px}
 
@@ -189,6 +191,12 @@
   .missbtn{width:100%;min-height:48px;margin-top:12px;border:1px solid #4a2626;background:#1a1315;
            color:#f87171;border-radius:10px;font-size:14px;font-weight:700}
   .missbtn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
+  /* Quieter than "mark missing" on purpose. A van that has already left is
+     routine bookkeeping, not a finding — it should not read as an alarm. */
+  .shipbtn{width:100%;min-height:48px;margin-top:8px;border:1px solid var(--line);
+           background:transparent;color:var(--mut);border-radius:10px;
+           font-size:14px;font-weight:700}
+  .shipbtn.confirm{background:#2a2e37;border-color:#5b6472;color:#e6e8ec}
 
   .photos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
   .photos a,.photos div.ph{position:relative;aspect-ratio:1;border-radius:9px;overflow:hidden;
@@ -382,7 +390,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 03:50";
+window.BUILD_STAMP = "Sep 08 14:45";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -580,7 +588,10 @@ function nowStamp(){
          String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
 const pad2 = n => String(n).padStart(2,'0');
-const resolved = r => r.status==='DONE' || r.status==='MISSING';
+/* Finished with, one way or another. SHIPPED is in here because the van is
+   gone — there is no work left on it and it must not sit in the queue for
+   ever. It is NOT an inspection, and everything that displays it says so. */
+const resolved = r => r.status==='DONE' || r.status==='MISSING' || r.status==='SHIPPED';
 const hidden   = r => r.status==='REMOVED' || r.status==='OFF-SITE';
 
 /**
@@ -641,6 +652,14 @@ function evalTags(r){
 function inspectedLine(r){
   if(!resolved(r)) return '';
   if(!r.inspectedBy && !r.inspectedAt) return '';
+  /* A shipped van reads from its own columns. Using "Inspected by" here would
+     put a name against work that was never done — the same lie we took out of
+     the load sign-off. */
+  if(r.status==='SHIPPED'){
+    if(!r.shippedBy && !r.shippedAt) return '<div class="insp">Marked shipped</div>';
+    return '<div class="insp">Marked shipped by <b>' + esc(r.shippedBy || 'unknown') + '</b>' +
+           (r.shippedAt ? ' · ' + esc(r.shippedAt) : '') + '</div>';
+  }
   const what = r.status==='MISSING' ? 'Marked missing by ' : 'Inspected by ';
   return '<div class="insp">' + what +
          '<b>' + esc(r.inspectedBy || 'unknown') + '</b>' +
@@ -651,6 +670,9 @@ function tagsFor(r){
   const t=[];
   if(r.status==='DONE') t.push('<span class="pill p-DONE">INSPECTED</span>');
   else if(r.status==='MISSING') t.push('<span class="pill p-MISSING">MISSING</span>');
+  // Never just "SHIPPED". The whole reason this status exists separately from
+  // DONE is that nobody looked at the van, and the pill has to say so.
+  else if(r.status==='SHIPPED') t.push('<span class="pill p-SHIPPED">SHIPPED · NOT INSPECTED</span>');
   else if(r.status==='IN PROGRESS') t.push('<span class="pill p-PROGRESS">IN PROGRESS</span>');
   else if(r.status==='REMOVED') t.push('<span class="pill p-REMOVED">REMOVED</span>');
   else if(r.status==='OFF-SITE') t.push('<span class="pill p-OFFSITE">NOT AT '+esc(S.homeYard||'HOME YARD')+'</span>');
@@ -775,17 +797,18 @@ function recomputeLoads(){
   S.rows.forEach(r=>{
     const id = (r.loadId||'').trim();
     if(!id || hidden(r)) return;                 // REMOVED / OFF-SITE are not ours to walk
-    const L = by[id] || (by[id] = {total:0, done:0, pending:0, missing:0, damage:0});
+    const L = by[id] || (by[id] = {total:0, done:0, pending:0, missing:0, shipped:0, damage:0});
     L.total++;
     if(resolved(r)) L.done++; else L.pending++;
     if(r.status==='MISSING') L.missing++;
+    if(r.status==='SHIPPED') L.shipped++;
     if(r.damage==='YES') L.damage++;
   });
   S.loads.forEach(l=>{
     const n = by[l.loadId];
     if(!n || n.total < l.total) return;
     l.total=n.total; l.done=n.done; l.pending=n.pending;
-    l.missing=n.missing; l.damage=n.damage;
+    l.missing=n.missing; l.shipped=n.shipped; l.damage=n.damage;
   });
 }
 
@@ -875,13 +898,22 @@ function loadCard(l){
   } else if(l.pending===0 && l.total>0){
     action = `<button class="lcomplete go" onclick="completeLoad('${esc(l.loadId)}',event)">Mark Load Inspection Complete</button>`;
   } else {
+    /* No bulk "close the load" here, deliberately. A load is not all-or-
+       nothing: two vans can have gone while the third is still standing in
+       its bay waiting to be walked. Closing them is done one VIN at a time,
+       from the van itself, so the third keeps its checklist. */
     action = `<button class="lcomplete wait" disabled>${l.done} of ${l.total} inspected — finish them all first</button>`;
   }
 
   const chips = [
+    // "ALL INSPECTED" has to mean all of them were. A load closed with vans
+    // that nobody looked at reads as CLOSED, and the chip beside it says how
+    // many were missed.
     l.pending ? `<span class="lchip c-pending">${l.pending} PENDING</span>`
-              : `<span class="lchip c-ready">ALL INSPECTED</span>`,
+              : (l.shipped ? `<span class="lchip c-ready">CLOSED</span>`
+                           : `<span class="lchip c-ready">ALL INSPECTED</span>`),
     l.missing ? `<span class="lchip c-missing">${l.missing} MISSING</span>` : '',
+    l.shipped ? `<span class="lchip c-shipped">${l.shipped} NOT INSPECTED</span>` : '',
     l.damage  ? `<span class="lchip c-damage">${l.damage} DAMAGED</span>` : ''
   ].filter(Boolean).join('');
 
@@ -1366,6 +1398,7 @@ function paintVinNow(r){
   if(!r.bayActual && sb && !parseBay(sb)) r.bayActual = sb;
   S.bayFree = !parseBay(sb);
   S.confirmMissing = false;
+  S.confirmShipped = false;
   /* A van that has been Marked Inspected opens as a record of what was
      found, not as a live form — and that is true whichever list he came
      from. Opening a finished van from the VIN list used to hand back the
@@ -1446,7 +1479,8 @@ function bayField(r){
     return `\x3cinput type="text" id="bayFree" value="${esc(r.bayActual||r.baySheet||'')}"
                    placeholder="Bay location" oninput="setText('bayActual',this.value)">
             ${sheet?`\x3cbutton class="linkbtn" onclick="S.bayFree=false;renderForm()">← Back to the digit picker\x3c/button>`:''}
-            ${missingButton()}`;
+            ${missingButton()}
+            ${shippedButton()}`;
   }
 
   const prefix = pad2(sheet.lane)+'L'+sheet.posRaw;              // e.g. 04L3
@@ -1465,7 +1499,8 @@ function bayField(r){
             : (bad ? 'Position 00 is not valid — pick another digit.' : 'Bay confirmed.')}\x3c/div>
     \x3cdiv class="digits">${digits}\x3c/div>
     \x3cbutton class="linkbtn" onclick="S.bayFree=true;renderForm()">Bay is different from the sheet\x3c/button>
-    ${missingButton()}`;
+    ${missingButton()}
+    ${shippedButton()}`;
 }
 
 function pickDigit(d){
@@ -1496,6 +1531,78 @@ function markMissing(){
     },
     fail:e=>{ S.confirmMissing=false; renderForm(); toast('Failed: '+e.message, 4000); }
   });
+}
+
+/* ---------- shipped without inspection ---------- */
+/**
+ * The van has already left. It happens, and it is not a failure worth hiding:
+ * trucks do not wait for the checklist. What matters is that the van stops
+ * sitting in the queue holding its load open.
+ *
+ * It sits beside "mark missing" because both answer the same question —
+ * "I cannot inspect this one" — and neither is the checklist.
+ */
+function shippedButton(){
+  return S.confirmShipped
+    ? `\x3cbutton class="shipbtn confirm" onclick="markShipped()">Tap again — close as SHIPPED, not inspected\x3c/button>`
+    : `\x3cbutton class="shipbtn" onclick="S.confirmShipped=true;renderForm()">Van has already shipped — close it\x3c/button>`;
+}
+
+function markShipped(){
+  const vin = S.current.vin;
+  mutate({
+    fn:'apiMarkShipped', args:[vin, '', me()], vin:vin,
+    ok:(r, queued)=>{
+      // shippedBy / shippedAt, never inspectedBy — nobody inspected it.
+      if(queued) patchLocal(vin, {status:'SHIPPED', shippedBy:me(), shippedAt:nowStamp()});
+      clearDraft(vin);
+      toast('…'+vin.slice(-6)+' closed — shipped, not inspected'+
+            (queued?' — waiting for signal':''), 3000);
+      backToList();
+    },
+    fail:e=>{ S.confirmShipped=false; renderForm(); toast('Failed: '+e.message, 4000); }
+  });
+}
+
+/**
+ * The whole screen for a van that left before anyone could inspect it.
+ *
+ * Deliberately not the "inspected" record screen: there is no result to show,
+ * and dressing an empty checklist up as one would be the worst thing this
+ * screen could do.
+ */
+function renderShipped(r){
+  $('formView').innerHTML = `
+    \x3cbutton class="back" onclick="backToList()">‹ Back\x3c/button>
+
+    \x3cdiv class="grp">
+      \x3cdiv class="vin" style="font-size:20px">${esc(r.vin)}\x3c/div>
+      \x3cdiv class="tags">${tagsFor(r)}\x3c/div>
+      \x3cdiv class="facts" style="margin-top:11px">
+        \x3cdiv class="fact" style="flex:1">\x3cdiv class="k">LOAD ID\x3c/div>
+          \x3cdiv class="v ${r.loadId?'':'none'}">${esc(r.loadId||'— none —')}\x3c/div>\x3c/div>
+        \x3cdiv class="fact" style="flex:1">\x3cdiv class="k">BAY ON SHEET\x3c/div>
+          \x3cdiv class="v ${r.baySheet?'mono':'none'}">${esc(bayDisplay(r.baySheet)||'—')}\x3c/div>\x3c/div>
+      \x3c/div>
+      \x3cdiv style="margin-top:10px">
+        ${r.description?'\x3cdiv class="kv">Model \x3cb>'+esc(r.description)+'\x3c/b>\x3c/div>':''}
+        ${r.shippedBy?'\x3cdiv class="kv">Marked shipped by \x3cb>'+esc(r.shippedBy)+'\x3c/b> '+esc(r.shippedAt||'')+'\x3c/div>':''}
+      \x3c/div>
+    \x3c/div>
+
+    \x3cdiv class="grp" style="text-align:center;padding:22px 14px">
+      \x3cdiv style="font-size:34px;line-height:1">📦\x3c/div>
+      \x3cdiv style="font-weight:700;font-size:17px;margin-top:8px">Shipped without inspection\x3c/div>
+      \x3cdiv class="bayhint" style="margin-top:8px">
+        This van left the yard before it was inspected. There is no record of
+        its condition at collection.
+      \x3c/div>
+    \x3c/div>
+
+    \x3cbutton class="addbtn" onclick="foundIt()">Still here — reopen the inspection\x3c/button>`;
+
+  $('bottom').innerHTML =
+    '\x3cbutton class="btn pri" style="flex:1" onclick="backToList()">Done\x3c/button>';
 }
 
 /** Running inside Telegram rather than a browser? */
@@ -1843,6 +1950,9 @@ function renderForm(){
   // and a roof type on a van nobody can see is a form nobody can honestly
   // fill in — so the checklist goes away entirely.
   if(r.status==='MISSING' && !S.unlocked) return renderMissing(r);
+  // Same reasoning for a van that has already left: there is nothing in front
+  // of anyone to fill a checklist in about.
+  if(r.status==='SHIPPED' && !S.unlocked) return renderShipped(r);
   const dmgStyle = v => v==='YES'?'bad':'no';
   const docStyle = v => v==='YES'?'ok':'bad';
 
@@ -1970,6 +2080,7 @@ function decide(action){
 }
 
 function backToList(){ closeApprove(); S.current=null; S.confirmMissing=false;
+                       S.confirmShipped=false;
                        S.evalMode=false; S.unlocked=false;
                        showForm(false); refresh(); render(); }
 
