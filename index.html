@@ -390,7 +390,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 15:37";
+window.BUILD_STAMP = "Sep 08 16:13";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -1465,7 +1465,8 @@ function setField(f,v){
     // renderForm() above has already redrawn, so the photo section exists to
     // drop the shot into.
     if(cameraSupported()) openCamera();
-    else { const el=$('file'); if(el) el.click(); }
+    // fileCam, not file — this one is asking for the camera on purpose.
+    else { const el=$('fileCam'); if(el) el.click(); }
   }
 }
 function setText(f,v){ S.current[f]=v; saveDraft(S.current.vin, S.current); }
@@ -1912,9 +1913,22 @@ function damagePhotoStep(code){
       \x3cdiv class="photos" id="dmgGrid">${
         dmgShots(r,code).map(u=>`\x3ca href="${esc(u)}" target="_blank">\x3cimg src="${esc(thumb(u))}">\x3c/a>`).join('')
       }\x3c/div>
-      \x3cinput type="file" id="dmgFile" accept="image/\x2a" capture="environment" multiple
+      \x3c!-- TWO inputs, and the difference is the whole point.
+
+           capture="environment" is not a hint, it is an instruction: use the
+           camera. iOS obeys it strictly and never offers the photo library,
+           so a single input carrying it made "Add from gallery" open the
+           camera — which is exactly what the yard reported.
+
+           So: the gallery input has NO capture, and a second input keeps it
+           for the paths that really do want the camera. --\x3e
+      \x3cinput type="file" id="dmgFile" accept="image/\x2a" multiple
              class="hide" onchange="handleFiles(this.files)">
-      ${cameraSupported() ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>' : ''}
+      \x3cinput type="file" id="dmgFileCam" accept="image/\x2a" capture="environment"
+             class="hide" onchange="handleFiles(this.files)">
+      ${cameraSupported()
+        ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>'
+        : '\x3cbutton class="addbtn" onclick="document.getElementById(\'dmgFileCam\').click()">📷 Take a photo\x3c/button>'}
       \x3cbutton class="addbtn" style="margin-top:8px"
               onclick="document.getElementById('dmgFile').click()">🖼 Add from gallery\x3c/button>
       \x3cbutton class="btn pri" style="margin-top:14px" onclick="finishDamage()">Done\x3c/button>
@@ -2006,9 +2020,16 @@ function renderForm(){
         \x3cdiv class="lab">Photos (${r.photoCount||0})${photoWhy(r)}\x3c/div>
         \x3cdiv class="photos" id="photoGrid">${(r.photoLinks||[]).map(u=>
           `\x3ca href="${esc(u)}" target="_blank">\x3cimg src="${esc(thumb(u))}" loading="lazy">\x3c/a>`).join('')}\x3c/div>
-        \x3cinput type="file" id="file" accept="image/\x2a" capture="environment" multiple
+        \x3c!-- Gallery input: no capture, or iOS opens the camera instead. --\x3e
+        \x3cinput type="file" id="file" accept="image/\x2a" multiple
                class="hide" onchange="handleFiles(this.files)">
-        ${cameraSupported() ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>' : ''}
+        \x3c!-- Camera input: capture, for the VIN-discrepancy prompt and for
+             phones with no getUserMedia. --\x3e
+        \x3cinput type="file" id="fileCam" accept="image/\x2a" capture="environment"
+               class="hide" onchange="handleFiles(this.files)">
+        ${cameraSupported()
+          ? '\x3cbutton class="addbtn" onclick="openCamera()">📷 Open camera\x3c/button>'
+          : '\x3cbutton class="addbtn" onclick="document.getElementById(\'fileCam\').click()">📷 Take a photo\x3c/button>'}
         \x3cbutton class="addbtn" style="margin-top:8px"
                 onclick="document.getElementById('file').click()">🖼 Add from gallery\x3c/button>
 
@@ -2093,7 +2114,11 @@ window.__P3 = 1;
 /* ---------- photos ---------- */
 function handleFiles(files){
   [].slice.call(files).forEach(uploadOne);
-  ['file','dmgFile'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  // All four: the gallery inputs and the camera ones. An input that keeps its
+  // value will not fire onchange when the same file is picked twice.
+  ['file','fileCam','dmgFile','dmgFileCam'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value='';
+  });
 }
 
 /* ==================================================================
