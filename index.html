@@ -390,7 +390,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 17:16";
+window.BUILD_STAMP = "Sep 08 23:13";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -2487,7 +2487,37 @@ const MAX_PHOTOS = 15;         // queued photos, not photos per VIN
  * simply hangs — which is what had supervisors staring at a spinner. Stop
  * waiting, put it in the outbox, let him carry on.
  */
-const TIMEOUT_MS = { apiUploadPhoto: 30000, apiCompleteLoad: 25000, _default: 15000 };
+/* HOW LONG TO WAIT BEFORE ASSUMING A REQUEST DIED.
+   Not how long the supervisor waits — that is GRACE_MS, 1.2 seconds, and he
+   walks off after it whatever happens here. This is only how long the queue
+   gives an attempt before putting it back and trying again.
+
+   Sized per call, because they do very different amounts of work. Marking a
+   van shipped writes one cell. Marking one INSPECTED writes the row, sends the
+   evaluation email to AWC with its photos pulled out of Drive, and then posts
+   a photo album to Telegram — all before it answers.
+
+   The old 15 seconds was set when a save only wrote a row, and it caused a
+   real incident: 2026-09-08, one inspection delivered three times because the
+   phone gave up at 15s on work the server completed at ~20s, then again when
+   the app was backgrounded. Each replay re-alerted the group and re-emailed
+   AWC. Apps Script has also been measured taking 15s for a plain board
+   refresh on a bad minute, so the headroom is not theoretical. */
+const TIMEOUT_MS = {
+  apiSave:         60000,   // row + AWC email + Telegram album
+  apiSetEval:      60000,   // email + notification
+  apiUploadPhoto:  45000,   // Drive write, and maybe a late-photo alert
+  apiCompleteLoad: 45000,   // publishes a whole load
+  apiMarkMissing:  30000,   // one message, no photos
+  _default:        15000    // apiMarkShipped and anything else that just writes
+};
+
+/* The abandon-and-restart detector MUST outlast the longest timeout above.
+   If it fires first it kills a request that is still working and re-sends it
+   while the original is running — the very duplicate this is all trying to
+   prevent. Computed, not typed, so the two can never drift apart again. */
+const STUCK_MS = Object.keys(TIMEOUT_MS)
+  .reduce(function (m, k) { return Math.max(m, TIMEOUT_MS[k]); }, 0) + 30000;
 
 /* ---------- storage that never throws ---------- */
 function lsGet(k, def){
@@ -2691,7 +2721,7 @@ function restartFlush(){
 
 /** In flight far longer than its own timeout — the phone has lost the call. */
 function flushStuck(){
-  return flushing && flushSince && (Date.now() - flushSince > 45000);
+  return flushing && flushSince && (Date.now() - flushSince > STUCK_MS);
 }
 
 function flushOutbox(){
