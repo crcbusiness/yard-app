@@ -190,6 +190,7 @@
   .linkbtn{background:none;border:none;color:var(--accent);font-size:13px;padding:10px 0 0;font-weight:600;width:100%}
   .missbtn{width:100%;min-height:48px;margin-top:12px;border:1px solid #4a2626;background:#1a1315;
            color:#f87171;border-radius:10px;font-size:14px;font-weight:700}
+  /* Armed: the van is being treated as missing and the checklist is gone. */
   .missbtn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
   /* Quieter than "mark missing" on purpose. A van that has already left is
      routine bookkeeping, not a finding — it should not read as an alarm. */
@@ -233,6 +234,10 @@
   .msub{font:600 13px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
         letter-spacing:.5px;margin-bottom:18px;word-break:break-all}
   .mbox input{margin-top:2px}
+  /* Shown only when confirming would undo somebody else's decision. */
+  .mwarn{margin:-8px 0 16px;padding:10px 12px;border-radius:9px;
+         background:#2a1c10;border:1px solid #7c4a12;color:#fbbf24;
+         font-size:13px;line-height:1.45;font-weight:600}
   .mbtns{display:flex;gap:9px;margin-top:16px}
   .hide{display:none}
 
@@ -316,23 +321,29 @@
   .dmod-warn{margin-top:8px;font-size:11.5px;font-weight:700;color:#fbbf24;letter-spacing:.3px}
 </style>
 <style>
-  /* TESTING decision buttons — deliberately set apart from the real bar */
-  #testBtns:empty{display:none}
-  /* The bar is a flex ROW. Without wrapping, the testing block becomes a
-     third column and squeezes Save draft and Mark Inspected into narrow
-     towers. It has to take a line of its own, underneath, leaving the two
-     real buttons exactly as they were. */
-  body.hastest .bar-bottom{flex-wrap:wrap}
-  #testBtns{flex:0 0 100%;width:100%;order:2}
-  .testwrap{margin-top:12px;padding-top:10px;border-top:2px dashed #7c4a12}
-  /* the bar is taller with these in it — let the form scroll clear */
-  body.hastest main{padding-bottom:250px}
-  .testlab{font:800 10px/1 inherit;letter-spacing:1.4px;color:#f59e0b;
-           text-align:center;margin-bottom:8px}
-  .tbtn{width:100%;min-height:46px;margin-top:7px;border-radius:9px;border:1px solid;
-        font-size:14.5px;font-weight:700;background:transparent}
-  .tbtn.ok{border-color:#1f6b4a;color:#4ade80}
-  .tbtn.ev{border-color:#2a4a6b;color:#7dd3fc}
+  /* ------------------------------------------------------------------
+     THE DECISION PAIR
+
+     Replaced the TESTING block on 2026-09-09. Those two buttons used to sit
+     under Mark Inspected behind a dashed orange "DO NOT PRESS" label while
+     they were being proved. They are the real thing now: on a van with
+     something wrong, they ARE how it is finished, so they take the bar
+     rather than hanging beneath it.
+
+     Stacked, not side by side: "Send Evaluation to (AWC)" does not fit
+     half of a 390px phone without shrinking to a size nobody taps
+     accurately in a yard with gloves on.
+     ------------------------------------------------------------------ */
+  .bar-bottom.stack{flex-direction:column;gap:8px}
+  .bar-bottom.stack .btn{width:100%}
+  /* the bar is taller stacked — let the form scroll clear of it */
+  body.hasdecide main{padding-bottom:210px}
+
+  /* Approve is a real commitment, so it is outlined rather than filled:
+     the filled green button on every other screen means "finish the normal
+     way", and this is not that. */
+  .btn.ok{background:transparent;color:#4ade80;border:1px solid #1f6b4a}
+  .btn.ev{background:transparent;color:#7dd3fc;border:1px solid #2a4a6b}
 </style>
 
 </head>
@@ -362,6 +373,8 @@
   <div class="mbox">
     <div class="mtitle" id="mtitle">Approve for shipping</div>
     <div class="msub" id="mvin"></div>
+    <!-- Only filled when the confirmation undoes somebody else's decision. -->
+    <div class="mwarn hide" id="mwarn"></div>
     <label class="lab" for="approver" id="mlabel">Who approved?</label>
     <input type="text" id="approver" placeholder="Full name" autocomplete="off"
            autocapitalize="words" oninput="checkApprover()">
@@ -390,7 +403,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-
 
 /* Stamped when this file was built. It is the only way to tell, from a phone
    in a yard, whether the app it is running is the one you just uploaded. */
-window.BUILD_STAMP = "Sep 08 23:13";
+window.BUILD_STAMP = "Sep 09 22:53";
 
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
@@ -416,11 +429,17 @@ if (tg) {
   const sp = fromUrl() || (tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '';
   if (/^load[_-]/i.test(sp))     window.__TG_LOAD = sp.replace(/^load[_-]/i, '');
   else if (/^vin[_-]/i.test(sp)) window.__TG_VIN  = sp.replace(/^vin[_-]/i, '').toUpperCase();
-  // An 'Approve Eval' / 'Send Eval Email' button: open that van AND raise
-  // the dialog it was pressed for.
-  else if (/^(sup|oem|eml)[_-]/i.test(sp)) {
-    window.__TG_ACT = sp.slice(0, 3).toLowerCase();
-    window.__TG_VIN = sp.slice(4).toUpperCase();
+  /* A button in a group message: open that van AND raise the dialog it was
+     pressed for. 'deny' is the live one; 'sup', 'oem' and 'eml' are the three
+     older buttons, still sitting in messages already posted to the group.
+
+     Split on the separator rather than by a fixed width — the old code sliced
+     at 3 and 4 characters, which quietly broke the moment an action was not
+     three letters long. */
+  else if (/^(sup|oem|eml|deny)[_-]/i.test(sp)) {
+    const cut = sp.search(/[_-]/);
+    window.__TG_ACT = sp.slice(0, cut).toLowerCase();
+    window.__TG_VIN = sp.slice(cut + 1).toUpperCase();
   }
 }
 
@@ -562,6 +581,7 @@ const POS_MAX  = 99;
 let S = {
   view:'vins', sort:'bay', q:'', bayFree:false, homeYard:'',
   evalMode:false, unlocked:false, showApproved:false, nameKind:'', nameRole:'',
+  confirmCancel:false,          // Cancel armed once, waiting for the second tap
   pendingAction:'',            // set by an 'Approve Eval' button in Telegram
   dmgDraft:null,               // the damage being built: {area, type, sev}
   dmgPhotoCode:'',             // photos taken now belong to this damage
@@ -1201,9 +1221,9 @@ function renderInspected(){
 
   // Unlock is always the right-hand button. A flagged van gets the approval
   // beside it; a clean one needs nothing else, so Unlock fills the bar.
-  $('bottom').innerHTML =
+  plainBar(
     (flagged ? `<button class="btn sec" onclick="askName('APPROVED')">Approve for shipping</button>` : '') +
-    `<button class="btn pri" onclick="unlockInspection()">Unlock Inspection</button>`;
+    `<button class="btn pri" onclick="unlockInspection()">Unlock Inspection</button>`);
 }
 
 /** Drop back into the editable checklist to redo or add to the inspection. */
@@ -1270,22 +1290,32 @@ function saveEdits(){
    clears it: the van leaves the pending sections of Eval either way. */
 const ROLE_LABEL = { sup:'Yard Supervisor', oem:'OEM Coordinator' };
 
-function askName(kind, role){
+/**
+ * `warn` is set when the confirmation is about to undo somebody else's
+ * decision — it says so in the dialog, in words, before the name field.
+ */
+function askName(kind, role, warn){
   S.nameKind = kind;
   S.nameRole = role || '';
   const rl = ROLE_LABEL[S.nameRole] || '';
+  const denial = !!warn;
   $('mtitle').textContent = kind==='APPROVED'
     ? (rl ? 'Approve — ' + rl : 'Approve for shipping')
-    : 'Request evaluation';
+    : (denial ? 'Send to AWC' : 'Request evaluation');
   $('mlabel').textContent = kind==='APPROVED'
     ? (rl ? 'Your name (' + rl + ')' : 'Who approved?')
-    : 'Who requested the evaluation?';
-  $('approveGo').textContent = kind==='APPROVED' ? 'Approve' : 'Confirm request';
+    : (denial ? 'Your name' : 'Who requested the evaluation?');
+  $('approveGo').textContent = kind==='APPROVED' ? 'Approve'
+                             : (denial ? 'Send to AWC' : 'Confirm request');
   $('mvin').textContent = S.current.vin;
+
+  const w = $('mwarn');
+  if(w){ w.textContent = warn || ''; w.classList.toggle('hide', !warn); }
+
   const i = $('approver');
   // Inside Telegram the name is already known and verified, so he confirms
   // rather than types. In a browser it is still a blank field.
-  i.value = (S.nameRole && me()) ? me() : '';
+  i.value = ((S.nameRole || denial) && me()) ? me() : '';
   $('approveGo').disabled = !i.value.trim();
   $('modal').classList.remove('hide');
   setTimeout(()=>i.focus(), 60);
@@ -1310,11 +1340,28 @@ function confirmName(){
     ok:(r, queued)=>{
       closeApprove();
       go.textContent = label;
-      if(queued) patchLocal(vin, {evalStatus: kind});
-      toast((kind==='APPROVED'
-        ? '…'+vin.slice(-6)+' approved for shipping by '+name
-        : 'Evaluation requested for …'+vin.slice(-6)+' by '+name)
-        + (queued ? ' — waiting for signal' : ''), 3000);
+      /* Keep the phone's copy current either way. It used to be patched only
+         when the call was queued, so after a successful decision the cached
+         row still read as undecided — and openVin paints from the cache
+         first. Tapping the group's button twice would have re-opened the
+         dialog on a van already sent to AWC and asked the server again. */
+      patchLocal(vin, queued ? {evalStatus: kind} : r);
+      let msg;
+      if(kind==='APPROVED'){
+        msg = '…'+vin.slice(-6)+' approved for shipping by '+name;
+      } else if(queued){
+        msg = 'Evaluation requested for …'+vin.slice(-6)+' by '+name;
+      } else {
+        /* The server sends the email before it answers, so by now the outcome
+           is known. Saying "sent to AWC" when it was not is the one thing
+           this toast must never do. */
+        const em = String((r && r.evalEmail) || '');
+        msg = (em && em.indexOf('NOT SENT') !== 0)
+            ? '…'+vin.slice(-6)+' — evaluation emailed to AWC'
+            : '…'+vin.slice(-6)+' — EVAL NOT SENT, the email did not go out';
+      }
+      toast(msg + (queued ? ' — waiting for signal' : ''),
+            /did not go out/.test(msg) ? 7000 : 3000);
       backToList();
     },
     fail:e=>{
@@ -1425,8 +1472,22 @@ function runPendingAction(){
   const act = S.pendingAction;
   if(!act || !S.current) return;
   S.pendingAction = '';
-  if(act === 'eml'){
-    toast('The evaluation email is not set up yet — nothing was sent.', 5000);
+
+  /* 'deny' — the one button left in the group message, on a van CRC already
+     approved. It does exactly what "Send Evaluation to (AWC)" does here:
+     records REQUESTED and sends AWC the email. The confirmation exists
+     because it also overturns a colleague's decision, and the name it records
+     is the person who pressed it. */
+  if(act === 'deny' || act === 'eml'){
+    // 'eml' is the old button, still live in messages already in the group.
+    if(S.current.evalStatus === 'REQUESTED'){
+      toast('AWC has already been sent this one.', 3500);
+      return;
+    }
+    askName('REQUESTED', '', S.current.evalStatus === 'APPROVED'
+      ? 'This overturns the approval by ' +
+        (S.current.approvedBy || 'CRC') + ' and emails AWC.'
+      : 'This emails AWC for an evaluation.');
     return;
   }
   if(act === 'sup' || act === 'oem') askName('APPROVED', act);
@@ -1518,23 +1579,72 @@ function pickDigit(d){
 }
 
 /* ---------- missing ---------- */
+/* ---------- missing ----------
+   Changed 2026-09-09. This used to be a two-tap confirm that recorded the van
+   MISSING the instant the second tap landed. It is a MODE now: one tap turns
+   the screen into "this van is not here", which takes the checklist away —
+   there is nothing to fill in about a van nobody can see, and a form asking
+   for a roof type on one is a form that can only be answered dishonestly.
+
+   Tapping it again puts the checklist back. Nothing is written until the bar
+   is used, so the tap is free and reversible, which is what makes it safe to
+   have it take the whole screen. */
+/**
+ * Put the bar back to one plain row. paintBar may have left it stacked with
+ * the decision pair in it, and the screens below are not decisions.
+ */
+function plainBar(html){
+  const bar = $('bottom');
+  bar.className = 'bar-bottom';
+  document.body.classList.remove('hasdecide');
+  bar.innerHTML = html;
+}
+
 function missingButton(){
   return S.confirmMissing
-    ? `\x3cbutton class="missbtn confirm" onclick="markMissing()">Tap again — mark this VIN MISSING\x3c/button>`
+    ? `\x3cbutton class="missbtn confirm" onclick="S.confirmMissing=false;renderForm()">Tap again to unmark missing\x3c/button>`
     : `\x3cbutton class="missbtn" onclick="S.confirmMissing=true;renderForm()">Van not here — mark missing\x3c/button>`;
 }
 
+/**
+ * Record the van MISSING and send AWC the evaluation, in ONE call.
+ *
+ * One call rather than two on purpose: doing them separately fires the group
+ * alert while the van is still "missing, nobody has decided", and leaves a
+ * window where the sheet says missing and AWC has not been told. The server
+ * writes both, then notifies once.
+ */
 function markMissing(){
-  const vin = S.current.vin;
+  const r = S.current, vin = r.vin;
+  const btn = $('missGoBtn');
+  if(btn){ btn.disabled = true; btn.innerHTML = '\x3cspan class="spin">\x3c/span> Sending'; }
   mutate({
-    fn:'apiMarkMissing', args:[vin, '', me()], vin:vin,
-    ok:(r, queued)=>{
-      if(queued) patchLocal(vin, {status:'MISSING', inspectedBy:me(), inspectedAt:nowStamp()});
+    fn:'apiMarkMissing', args:[vin, (r.damageNotes||'').trim(), me(), 'REQUESTED'], vin:vin,
+    ok:(server, queued)=>{
+      if(queued) patchLocal(vin, {status:'MISSING', evalStatus:'REQUESTED',
+                                  evalRequestedBy:me(),
+                                  inspectedBy:me(), inspectedAt:nowStamp()});
+      else patchLocal(vin, server);
       clearDraft(vin);
-      toast('…'+vin.slice(-6)+' marked MISSING'+(queued?' — waiting for signal':''), 2600);
-      backToList();
+      const tail = '…'+vin.slice(-6);
+      let msg;
+      if(queued){
+        msg = tail+' — not here, marked MISSING — waiting for signal';
+      } else {
+        /* Only say AWC has it because the server said so. The email goes out
+           before it answers, so by now the outcome is known. */
+        const em = String((server && server.evalEmail) || '');
+        msg = (em && em.indexOf('NOT SENT') !== 0)
+            ? tail+' — MISSING, evaluation emailed to AWC'
+            : tail+' — MISSING, but EVAL NOT SENT — the email did not go out';
+      }
+      toast(msg, /did not go out/.test(msg) ? 7000 : 3200);
+      setTimeout(backToList, 420);
     },
-    fail:e=>{ S.confirmMissing=false; renderForm(); toast('Failed: '+e.message, 4000); }
+    fail:e=>{
+      if(btn){ btn.disabled = false; btn.textContent = 'Send Evaluation to (AWC)'; }
+      toast('Failed: '+e.message, 4000);
+    }
   });
 }
 
@@ -1606,8 +1716,7 @@ function renderShipped(r){
 
     \x3cbutton class="addbtn" onclick="foundIt()">Still here — reopen the inspection\x3c/button>`;
 
-  $('bottom').innerHTML =
-    '\x3cbutton class="btn pri" style="flex:1" onclick="backToList()">Done\x3c/button>';
+  plainBar('\x3cbutton class="btn pri" style="flex:1" onclick="backToList()">Done\x3c/button>');
 }
 
 /** Running inside Telegram rather than a browser? */
@@ -1648,8 +1757,7 @@ function renderMissing(r){
 
     \x3cbutton class="addbtn" onclick="foundIt()">The van is here — reopen the inspection\x3c/button>`;
 
-  $('bottom').innerHTML =
-    '\x3cbutton class="btn pri" style="flex:1" onclick="backToList()">Done\x3c/button>';
+  plainBar('\x3cbutton class="btn pri" style="flex:1" onclick="backToList()">Done\x3c/button>');
 }
 
 /** It turned up. Put it back into the queue with the checklist. */
@@ -1738,7 +1846,6 @@ function damageSection(r){
     \x3c/div>`;
   }).join('');
 
-  const note = (r.damageNotes||'').trim();
   return `
     \x3cdiv class="grp">
       \x3cdiv class="lab">Damage${codes.length?' ('+codes.length+')':''}\x3c/div>
@@ -1746,6 +1853,19 @@ function damageSection(r){
       \x3cbutton class="addbtn" onclick="startDamage()">＋ Add damage\x3c/button>
     \x3c/div>
 
+    ${notesSection(r)}`;
+}
+
+/**
+ * Notes, on their own.
+ *
+ * Split out of damageSection on 2026-09-09 because a van being marked missing
+ * keeps this and loses everything else: there is no checklist to fill in about
+ * a van nobody can see, but there is always something to say about why.
+ */
+function notesSection(r){
+  const note = (r.damageNotes||'').trim();
+  return `
     \x3cdiv class="grp">
       \x3cdiv class="lab">Notes\x3c/div>
       ${note ? `\x3cdiv class="dmg note">
@@ -1961,9 +2081,129 @@ function photoWhy(r){
          d.join(' and ') + ' VIN\x3c/span>';
 }
 
+/**
+ * Is there anything wrong with this van that somebody has to rule on?
+ *
+ * Damage codes and document problems, and deliberately NOT a note. That
+ * matches what the server already believes — `evalReasons_` leaves notes out,
+ * because "driver mentioned a rattle" is not a finding an OEM has to answer
+ * and putting it in the eval queue buries the ones that are. Until today the
+ * two disagreed: a note-only van was offered the decision buttons here and
+ * then never appeared in Eval afterwards.
+ */
+function hasIssues(r){
+  return (r.damageCodes||[]).length > 0 ||
+         r.monroney==='MISSING' || r.monroney==='VIN DISCREPANCY' ||
+         r.gatepass==='MISSING' || r.gatepass==='VIN DISCREPANCY';
+}
+
+/**
+ * THE BOTTOM BAR — one rule, three outcomes.
+ *
+ *   not here          Cancel · Send Evaluation to (AWC)
+ *   something wrong   Approve Shipping (CRC) · Send Evaluation to (AWC)
+ *   nothing wrong     Cancel · Mark Inspected
+ *
+ * The middle case is the change of 2026-09-09. Finishing a van with something
+ * wrong is ONE act, not two: it is inspected AND a decision was taken, by the
+ * person standing at it. Mark Inspected is not offered there any more, because
+ * it was the button that closed a damaged van having said nothing about it and
+ * left the decision to somebody who never saw the van.
+ */
+function paintBar(r){
+  const bar = $('bottom');
+  const edit = S.evalMode && S.unlocked;      // reopened from the record screen
+  const cancel = edit
+    ? `\x3cbutton class="btn sec" onclick="cancelEdits()">Cancel\x3c/button>`
+    : `\x3cbutton class="btn sec" onclick="cancelInspection()">Cancel\x3c/button>`;
+
+  if(S.confirmMissing){
+    bar.className = 'bar-bottom stack';
+    document.body.classList.add('hasdecide');
+    bar.innerHTML = cancel +
+      `\x3cbutton class="btn ev" id="missGoBtn" onclick="markMissing()">Send Evaluation to (AWC)\x3c/button>`;
+    return;
+  }
+
+  if(hasIssues(r)){
+    bar.className = 'bar-bottom stack';
+    document.body.classList.add('hasdecide');
+    bar.innerHTML =
+      `\x3cbutton class="btn ok" onclick="decide('APPROVED')">Approve Shipping (CRC)\x3c/button>
+       \x3cbutton class="btn ev" onclick="decide('REQUESTED')">Send Evaluation to (AWC)\x3c/button>`;
+    return;
+  }
+
+  bar.className = 'bar-bottom';
+  document.body.classList.remove('hasdecide');
+  bar.innerHTML = cancel +
+    (edit
+      ? `\x3cbutton class="btn pri" id="saveEditsBtn" onclick="saveEdits()">Mark Inspected\x3c/button>`
+      : `\x3cbutton class="btn pri" id="doneBtn" onclick="save(true)">Mark Inspected\x3c/button>`);
+}
+
+/**
+ * Back out without finishing the van.
+ *
+ * The draft lives on the phone, so this throws work away — hence the arm when
+ * there is something to throw away, and a straight exit when there is not.
+ */
+function cancelInspection(){
+  const vin = S.current && S.current.vin;
+  if(!vin) return backToList();
+  if(!loadDraft(vin) || S.confirmCancel){ clearDraft(vin); return backToList(); }
+  S.confirmCancel = true;
+  toast('Tap Cancel again to discard the changes on this van', 4000);
+}
+
+/**
+ * The screen while he is saying the van is not here — before anything is
+ * written.
+ *
+ * The checklist is gone: no bay picker, no documents, no van type, no roof, no
+ * damage, no photos. Every one of those asks a question about a van in front
+ * of you, and there is no van in front of him. What stays is the header, the
+ * way back, and the note — because the useful thing about a missing van is
+ * what somebody has to say about it.
+ */
+function renderMarkingMissing(r){
+  $('formView').innerHTML = `
+    \x3cbutton class="back" onclick="backToList()">‹ Back\x3c/button>
+
+    \x3cdiv class="grp">
+      \x3cdiv class="vin" style="font-size:20px">${esc(r.vin)}\x3c/div>
+      \x3cdiv class="tags">${tagsFor(r)}\x3c/div>
+      \x3cdiv class="facts" style="margin-top:11px">
+        \x3cdiv class="fact" style="flex:1">\x3cdiv class="k">LOAD ID\x3c/div>
+          \x3cdiv class="v ${r.loadId?'':'none'}">${esc(r.loadId||'— none —')}\x3c/div>\x3c/div>
+        \x3cdiv class="fact" style="flex:1">\x3cdiv class="k">BAY ON SHEET\x3c/div>
+          \x3cdiv class="v ${r.baySheet?'mono':'none'}">${esc(bayDisplay(r.baySheet)||'—')}\x3c/div>\x3c/div>
+      \x3c/div>
+      ${r.description?'\x3cdiv class="kv" style="margin-top:10px">Model \x3cb>'+esc(r.description)+'\x3c/b>\x3c/div>':''}
+    \x3c/div>
+
+    \x3cdiv class="grp" style="text-align:center;padding:22px 14px">
+      \x3cdiv style="font-size:34px;line-height:1">🔍\x3c/div>
+      \x3cdiv style="font-weight:700;font-size:17px;margin-top:8px">Not at its bay\x3c/div>
+      \x3cdiv class="bayhint" style="margin-top:8px">
+        Nothing is recorded yet. Sending the evaluation marks it MISSING and
+        tells AWC. Tap below to put the checklist back.
+      \x3c/div>
+      ${missingButton()}
+    \x3c/div>
+
+    ${notesSection(r)}`;
+
+  paintBar(r);
+}
+
 function renderForm(){
   if(S.evalMode && !S.unlocked) return renderInspected();
   const r=S.current;
+  /* Cancel arms on the first tap and does not repaint, so the arm survives to
+     the second tap. Touching anything else on the form repaints — and that is
+     somebody who has changed their mind, so the arm goes. */
+  S.confirmCancel = false;
   // Nothing to inspect on a van that is not in its bay. Asking for documents
   // and a roof type on a van nobody can see is a form nobody can honestly
   // fill in — so the checklist goes away entirely.
@@ -1971,6 +2211,9 @@ function renderForm(){
   // Same reasoning for a van that has already left: there is nothing in front
   // of anyone to fill a checklist in about.
   if(r.status==='SHIPPED' && !S.unlocked) return renderShipped(r);
+  // And the same reasoning again, one step earlier: he has said it is not
+  // here, but nothing is written yet.
+  if(S.confirmMissing) return renderMarkingMissing(r);
   const dmgStyle = v => v==='YES'?'bad':'no';
   const docStyle = v => v==='YES'?'ok':'bad';
 
@@ -2040,62 +2283,7 @@ function renderForm(){
       \x3c/div>
     \x3c/div>`;
 
-  $('bottom').innerHTML = (S.evalMode && S.unlocked)
-    ? `\x3cbutton class="btn sec" onclick="cancelEdits()">Cancel\x3c/button>
-       \x3cbutton class="btn pri" id="saveEditsBtn" onclick="saveEdits()">Mark Inspected\x3c/button>`
-    : `\x3cbutton class="btn sec" onclick="save(false)">Save draft\x3c/button>
-       \x3cbutton class="btn pri" id="doneBtn" onclick="save(true)">Mark Inspected\x3c/button>`;
-
-  // $('bottom').innerHTML above replaces the bar wholesale, so the testing
-  // block is rebuilt after it rather than before.
-  paintTestButtons(r);
-}
-
-/* ================================================================
-   TESTING — the two decision buttons
-   ================================================================
-   These will eventually REPLACE Mark Inspected for a van with issues:
-   finishing such a van is one act, not two, and the decision is taken by the
-   person standing at it. While that is being proved they sit underneath the
-   normal bar, plainly labelled, so the yard can keep working exactly as it
-   does today and nothing changes for anyone who does not press them.
-
-   Each one marks the van inspected AND records the decision in the same
-   save, so there is one row written and one message sent.
-   ================================================================ */
-function paintTestButtons(r){
-  /* Inside the bar, under the two real buttons — not after it. Both are fixed
-     to the bottom of the screen, so a separate block there simply covers Mark
-     Inspected, which is how this first went wrong. */
-  const bar = document.getElementById('bottom');
-  if(!bar) return;
-  let host = document.getElementById('testBtns');
-  if(!host){
-    host = document.createElement('div');
-    host.id = 'testBtns';
-    bar.appendChild(host);
-  }
-
-  // Only where a decision means anything: a van with something wrong with it,
-  // still being inspected.
-  const issues = (r.damageCodes||[]).length ||
-                 (r.damageNotes||'').trim() ||
-                 r.monroney==='MISSING' || r.monroney==='VIN DISCREPANCY' ||
-                 r.gatepass==='MISSING' || r.gatepass==='VIN DISCREPANCY';
-  if(!issues || (S.evalMode && !S.unlocked) || r.status==='MISSING'){
-    host.innerHTML = '';
-    document.body.classList.remove('hastest');
-    return;
-  }
-  // The bar is taller now, so the form needs room to scroll clear of it.
-  document.body.classList.add('hastest');
-
-  host.innerHTML = `
-    \x3cdiv class="testwrap">
-      \x3cdiv class="testlab">TESTING — DO NOT PRESS\x3c/div>
-      \x3cbutton class="btn tbtn ok" onclick="decide('APPROVED')">Approve Shipping (CRC)\x3c/button>
-      \x3cbutton class="btn tbtn ev" onclick="decide('REQUESTED')">Send Evaluation to (AWC)\x3c/button>
-    \x3c/div>`;
+  paintBar(r);
 }
 
 /** Mark inspected and record the decision, in one save. */
@@ -2105,7 +2293,8 @@ function decide(action){
 }
 
 function backToList(){ closeApprove(); S.current=null; S.confirmMissing=false;
-                       S.confirmShipped=false;
+                       S.confirmShipped=false; S.confirmCancel=false;
+                       document.body.classList.remove('hasdecide');
                        S.evalMode=false; S.unlocked=false;
                        showForm(false); refresh(); render(); }
 
@@ -2323,10 +2512,10 @@ function save(complete, evalAction){
           const em = String((server && server.evalEmail) || '');
           msg = (em && em.indexOf('NOT SENT') !== 0)
               ? tail+' — evaluation emailed to AWC'
-              : tail+' — evaluation raised, but the email did NOT go out';
+              : tail+' — EVAL NOT SENT, the email did not go out';
         }
         else msg = 'Saved — '+tail+' complete';
-        toast(msg, /did NOT go/.test(msg) ? 7000 : ((waiting||queued) ? 4000 : 2200));
+        toast(msg, /did not go out/.test(msg) ? 7000 : ((waiting||queued) ? 4000 : 2200));
         setTimeout(backToList,420);
       } else {
         saveDraft(fresh.vin, fresh);
