@@ -16,11 +16,18 @@
   button,input,select{font-family:inherit}
   a{color:#7dd3fc}
 
+  /* --safetop is 0 normally. In fullscreen Telegram draws its own close and
+     menu buttons OVER the page, so the header is pushed down by whatever the
+     client says is unsafe. */
   header{position:sticky;top:0;z-index:20;background:#0f1115f2;backdrop-filter:blur(10px);
-         border-bottom:1px solid var(--line);padding:10px 14px}
+         border-bottom:1px solid var(--line);
+         padding:calc(10px + var(--safetop, 0px)) 14px 10px}
   .hrow{display:flex;align-items:baseline;gap:10px}
   h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.3px;flex:1}
   .who{font-size:11px;color:var(--dim)}
+  .grow{background:none;border:none;color:var(--dim);font-size:17px;line-height:1;
+        padding:2px 4px;cursor:pointer}
+  .grow:hover{color:var(--txt)}
   .tabs{display:flex;gap:6px;margin-top:10px}
   .tab{flex:1;padding:9px 4px;border:1px solid var(--line);background:transparent;color:var(--dim);
        border-radius:9px;font-size:13px;font-weight:600;cursor:pointer}
@@ -94,6 +101,7 @@
   <div class="hrow">
     <h1 id="title">CRC EVAL</h1>
     <div class="who" id="who"></div>
+    <button class="grow hide" id="grow" title="Fill the screen">⤢</button>
   </div>
   <div class="tabs">
     <button class="tab on" data-v="eval">Eval</button>
@@ -124,6 +132,61 @@ const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : 
 if (tg) {
   tg.ready(); tg.expand();
   try { tg.setHeaderColor('#0f1115'); tg.setBackgroundColor('#0f1115'); } catch (e) {}
+}
+
+/* ------------------------------------------------------------------
+   MAKING ROOM ON A COMPUTER
+
+   Telegram Desktop opens a Mini App in a phone-shaped window and there is no
+   way to change its width: neither Telegram's own documentation nor the
+   community reference lists any method that touches it. `expand()` only ever
+   affected height.
+
+   Fullscreen (Bot API 8.0) is the one lever that exists, and the docs are
+   silent on whether Desktop honours it — so this asks, and copes either way.
+   On a phone it is left alone unless the button is pressed: a dashboard that
+   swallows the whole screen uninvited is not what anyone wants in a yard.
+   ------------------------------------------------------------------ */
+const DESKTOP = /^(tdesktop|macos|weba|webk|web)$/.test((tg && tg.platform) || '');
+
+function canFullscreen() {
+  return !!(tg && typeof tg.requestFullscreen === 'function');
+}
+
+/* In fullscreen the client's own buttons are drawn over the page. It reports
+   the space they need; older clients report nothing, and 0 is the right
+   answer there because they are not overlaying anything either. */
+function applySafeTop() {
+  let top = 0;
+  try {
+    if (tg && tg.isFullscreen) {
+      const i = tg.contentSafeAreaInset || tg.safeAreaInset || {};
+      top = Number(i.top || 0);
+    }
+  } catch (e) {}
+  document.documentElement.style.setProperty('--safetop', top + 'px');
+  const b = document.getElementById('grow');
+  if (b) b.textContent = (tg && tg.isFullscreen) ? '⤡' : '⤢';
+}
+
+function toggleFullscreen() {
+  if (!canFullscreen()) return;
+  try {
+    if (tg.isFullscreen) tg.exitFullscreen(); else tg.requestFullscreen();
+  } catch (e) {}
+  // The event below is the reliable signal; this covers clients that fire none.
+  setTimeout(applySafeTop, 250);
+}
+
+if (canFullscreen()) {
+  const b = document.getElementById('grow');
+  b.classList.remove('hide');
+  b.onclick = toggleFullscreen;
+  try { tg.onEvent('fullscreenChanged', applySafeTop); } catch (e) {}
+  try { tg.onEvent('safeAreaChanged', applySafeTop); } catch (e) {}
+  try { tg.onEvent('contentSafeAreaChanged', applySafeTop); } catch (e) {}
+  // Only on a computer, where the window is the problem worth solving.
+  if (DESKTOP) { try { tg.requestFullscreen(); } catch (e) {} setTimeout(applySafeTop, 300); }
 }
 
 const $ = id => document.getElementById(id);
@@ -516,9 +579,16 @@ function dateLabel(r) {
 }
 
 function footer() {
+  /* The Telegram id is here for one reason: adding somebody to
+     TG_EVAL_VIEWERS or TG_EVAL_MANAGERS means putting their id in a property,
+     and there was no way to find out what it is without being refused first. */
+  const id = S.data.myId
+    ? '<br>Your Telegram id is <b>' + esc(S.data.myId) +
+      '</b> — the admin needs this to give anyone access.' : '';
   return '<div class="foot">Read-only. Nothing on this page changes anything —' +
          ' decisions are taken in the inspection app.<br>Read ' +
-         esc(S.data.generatedAt || '') + ' · ' + (S.data.total || 0) + ' units on file.</div>';
+         esc(S.data.generatedAt || '') + ' · ' + (S.data.total || 0) + ' units on file.' +
+         id + '</div>';
 }
 
 load();
