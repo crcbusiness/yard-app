@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CRC Eval</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --card2:#1d222b; --line:#262b36; --txt:#e8eaed; --dim:#9aa3b2;
+    --accent:#3b82f6; --ok:#10b981; --warn:#f59e0b; --bad:#ef4444;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  button,input,select{font-family:inherit}
+  a{color:#7dd3fc}
+
+  header{position:sticky;top:0;z-index:20;background:#0f1115f2;backdrop-filter:blur(10px);
+         border-bottom:1px solid var(--line);padding:10px 14px}
+  .hrow{display:flex;align-items:baseline;gap:10px}
+  h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.3px;flex:1}
+  .who{font-size:11px;color:var(--dim)}
+  .tabs{display:flex;gap:6px;margin-top:10px}
+  .tab{flex:1;padding:9px 4px;border:1px solid var(--line);background:transparent;color:var(--dim);
+       border-radius:9px;font-size:13px;font-weight:600;cursor:pointer}
+  .tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  main{padding:14px;max-width:1180px;margin:0 auto}
+
+  /* ---- counters ---- */
+  .tiles{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px}
+  .tile{flex:1 1 130px;background:var(--card);border:1px solid var(--line);
+        border-radius:11px;padding:11px 13px}
+  .tile .n{font-size:25px;font-weight:750;line-height:1.1}
+  .tile .k{font-size:10.5px;letter-spacing:.7px;color:var(--dim);text-transform:uppercase;margin-top:4px}
+  .tile .sub{font-size:11px;color:var(--dim);margin-top:3px}
+  .tile.warn .n{color:var(--warn)} .tile.bad .n{color:var(--bad)} .tile.ok .n{color:var(--ok)}
+
+  /* ---- filters ---- */
+  .bar{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .chip{padding:6px 11px;border:1px solid var(--line);background:transparent;color:var(--dim);
+        border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .chip.on{background:var(--card2);color:var(--txt);border-color:#3a4250}
+  .chip .c{opacity:.65;margin-left:5px}
+  input.search,input.date,select{background:var(--card);border:1px solid var(--line);
+        color:var(--txt);border-radius:9px;padding:8px 11px;font-size:14px}
+  input.search{flex:1;min-width:160px}
+  label.f{font-size:11.5px;color:var(--dim);letter-spacing:.4px}
+
+  /* ---- eval rows ---- */
+  .row{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:12px 14px;margin-bottom:9px}
+  .r1{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .vin{font:700 15px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px}
+  .meta{font-size:12.5px;color:var(--dim)}
+  .st{font-size:10.5px;font-weight:800;letter-spacing:.7px;padding:3px 8px;border-radius:6px;
+      border:1px solid;white-space:nowrap}
+  .st.TO_DECIDE{color:#fbbf24;border-color:#7c4a12;background:#2a1c10}
+  .st.WITH_AWC{color:#7dd3fc;border-color:#2a4a6b;background:#12202c}
+  .st.EMAIL_FAILED{color:#fca5a5;border-color:#7f1d1d;background:#2a1214}
+  .st.APPROVED_CRC{color:#4ade80;border-color:#1f6b4a;background:#0f2119}
+  .st.APPROVED_AWC{color:#4ade80;border-color:#1f6b4a;background:#0f2119}
+  .st.CLOSED{color:var(--dim);border-color:var(--line);background:var(--card2)}
+  .issues{margin-top:8px;font-size:13px}
+  .issues div{margin-top:2px}
+  .dmg{color:#fca5a5} .doc{color:#fbbf24} .note{color:#c9d2da}
+  .trail{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);
+         display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
+  .trail b{color:var(--txt);font-weight:600}
+  .age{font-weight:700}
+  .age.hot{color:var(--warn)} .age.cold{color:var(--bad)}
+
+  /* ---- table (YARD) ---- */
+  .tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{font-size:10.5px;letter-spacing:.7px;color:var(--dim);text-transform:uppercase;font-weight:700}
+  tr:last-child td{border-bottom:none}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  td.name{white-space:normal}
+
+  .empty{text-align:center;color:var(--dim);padding:44px 20px;font-size:14.5px}
+  .foot{color:var(--dim);font-size:11.5px;margin-top:18px;line-height:1.6}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #ffffff33;
+        border-top-color:#fff;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1 id="title">CRC EVAL</h1>
+    <div class="who" id="who"></div>
+  </div>
+  <div class="tabs">
+    <button class="tab on" data-v="eval">Eval</button>
+    <button class="tab" data-v="me">Me</button>
+    <button class="tab" data-v="yard">Yard</button>
+  </div>
+</header>
+
+<main id="view"><div class="empty"><span class="spin"></span> Loading…</div></main>
+
+<script>
+/* ------------------------------------------------------------------
+   CRC EVAL — the office dashboard.
+
+   READ-ONLY BY DESIGN. There is no call in this file that writes anything:
+   the only server function it knows about is apiEvalBoard, which reads. The
+   field app is working and is not to be disturbed, so this can only look.
+
+   Separate page, separate Mini App, same bot and same /exec. Telegram signs
+   who is asking, so there is no login and no second permission model.
+   ------------------------------------------------------------------ */
+
+/* Filled by build-telegram.py from exec-url.txt — the same address the field
+   app posts to. If that URL ever changes, rebuild so BOTH files get it. */
+const API_URL = "https://script.google.com/macros/s/AKfycbxZf6YWZ01-v1tA_UNmuYi-FVhW-yIC0Iw3NYHnZ0AII0SSgqFqI-_wHjWejqfDYB0G6g/exec";
+
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.setHeaderColor('#0f1115'); tg.setBackgroundColor('#0f1115'); } catch (e) {}
+}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+let S = {
+  view: 'eval',
+  data: null,
+  states: {},            // which state chips are on; empty = all
+  q: '',
+  person: '',            // ME tab, when allowed to look at others
+  from: '', to: ''       // YARD tab date range, yyyy-mm-dd
+};
+
+const STATE_LABEL = {
+  TO_DECIDE:    'To decide',
+  WITH_AWC:     'With AWC',
+  EMAIL_FAILED: 'Email failed',
+  APPROVED_CRC: 'Approved · CRC',
+  APPROVED_AWC: 'Approved · AWC',
+  CLOSED:       'Closed'
+};
+const STATE_ORDER = ['EMAIL_FAILED','TO_DECIDE','WITH_AWC','APPROVED_AWC','APPROVED_CRC','CLOSED'];
+
+/* ---------- talking to the server ---------- */
+function call(fn, args) {
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ fn: fn, args: args || [], initData: tg ? tg.initData : '' })
+  })
+  .then(r => r.text())
+  .then(t => {
+    let d;
+    try { d = JSON.parse(t); }
+    catch (e) { throw new Error('Got a page, not data — is the URL right?'); }
+    if (!d.ok) throw new Error(d.error || 'Refused');
+    return d.data;
+  });
+}
+
+function load() {
+  const r = range();
+  $('view').innerHTML = '<div class="empty"><span class="spin"></span> Loading…</div>';
+  call('apiEvalBoard', [r.from, r.to])
+    .then(d => { S.data = d; paintHeader(); render(); })
+    .catch(e => {
+      $('view').innerHTML =
+        '<div class="empty"><b>Could not load.</b><br><br>' + esc(e.message) + '</div>';
+    });
+}
+
+/* The window the ME and YARD tabs count over. EVAL is never date-filtered —
+   a van sent to AWC nine days ago is exactly the one to look at. */
+function range() {
+  if (S.from && S.to) {
+    const a = new Date(S.from + 'T00:00:00');
+    const b = new Date(S.to   + 'T23:59:59');
+    return { from: a.getTime(), to: b.getTime() };
+  }
+  const t = new Date(); t.setHours(0,0,0,0);
+  return { from: t.getTime(), to: Date.now() };
+}
+
+function paintHeader() {
+  const d = S.data;
+  $('title').textContent = 'CRC EVAL' + (d.homeYard ? ' — ' + d.homeYard : '');
+  $('who').textContent = d.me || '';
+}
+
+/* ---------- who is who ----------
+   The same person is written down more than one way. Telegram signs them as
+   "Anton Balta (@antonbalta)"; the app writes that into Inspected By; but
+   Approved By is TYPED, and the Telegram approval path appends a role —
+   "Anton Balta · Yard Supervisor". Comparing those as strings splits one
+   person into three, which would quietly undercount every number on this
+   page. So every comparison and every grouping goes through here. */
+function norm(n) {
+  return String(n || '')
+    .replace(/\(@[^)]*\)/g, ' ')        // (@antonbalta)
+    .replace(/\s*·.*$/, ' ')            // · Yard Supervisor
+    .replace(/\s+/g, ' ')
+    .trim().toLowerCase();
+}
+/* The nicest spelling seen for a person — the longest, which is the one that
+   still has the handle or the role on it. */
+function displayName(list, key) {
+  let best = '';
+  list.forEach(n => { if (norm(n) === key && String(n).length > best.length) best = n; });
+  return best || key;
+}
+
+/* ---------- helpers ---------- */
+function days(ms) { return ms ? Math.floor((Date.now() - ms) / 86400000) : null; }
+function ago(ms) {
+  if (!ms) return '';
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 60) return m + ' min ago';
+  if (m < 1440) return Math.floor(m / 60) + ' hr ago';
+  const d = Math.floor(m / 1440);
+  return d === 1 ? 'yesterday' : d + ' days ago';
+}
+function ageClass(ms) {
+  const d = days(ms);
+  if (d === null) return '';
+  if (d >= 3) return 'cold';
+  if (d >= 1) return 'hot';
+  return '';
+}
+function ymd(ms) {
+  const d = new Date(ms), p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+/* ---------- tabs ---------- */
+document.querySelector('.tabs').onclick = e => {
+  const b = e.target.closest('.tab'); if (!b) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  b.classList.add('on');
+  S.view = b.dataset.v;
+  render(); window.scrollTo(0, 0);
+};
+
+function render() {
+  if (!S.data) return;
+  if (S.view === 'eval') return renderEval();
+  if (S.view === 'me')   return renderMe();
+  return renderYard();
+}
+
+/* ==================================================================
+   EVAL — the spreadsheet view, focused on units under evaluation
+   ================================================================== */
+function renderEval() {
+  const rows = S.data.evalRows || [];
+  const counts = {};
+  rows.forEach(r => { counts[r.state] = (counts[r.state] || 0) + 1; });
+
+  const live = rows.filter(r => r.state === 'TO_DECIDE' || r.state === 'WITH_AWC'
+                                || r.state === 'EMAIL_FAILED');
+  const stale = rows.filter(r => r.state === 'WITH_AWC' && days(r.evalAtMs) >= 3);
+
+  const tiles = `
+    <div class="tiles">
+      <div class="tile ${counts.EMAIL_FAILED ? 'bad' : ''}">
+        <div class="n">${counts.EMAIL_FAILED || 0}</div><div class="k">Email failed</div>
+        <div class="sub">${counts.EMAIL_FAILED ? 'needs a person' : 'all sent'}</div></div>
+      <div class="tile warn"><div class="n">${counts.TO_DECIDE || 0}</div>
+        <div class="k">To decide</div><div class="sub">nobody has ruled</div></div>
+      <div class="tile"><div class="n">${counts.WITH_AWC || 0}</div>
+        <div class="k">With AWC</div>
+        <div class="sub">${stale.length ? stale.length + ' over 3 days' : 'none stale'}</div></div>
+      <div class="tile ok"><div class="n">${(counts.APPROVED_CRC||0)+(counts.APPROVED_AWC||0)}</div>
+        <div class="k">Approved</div>
+        <div class="sub">${counts.APPROVED_AWC||0} after AWC · ${counts.APPROVED_CRC||0} CRC</div></div>
+    </div>`;
+
+  const chips = STATE_ORDER.filter(k => counts[k]).map(k =>
+    `<button class="chip ${S.states[k] ? 'on' : ''}" onclick="toggleState('${k}')">${
+      STATE_LABEL[k]}<span class="c">${counts[k]}</span></button>`).join('');
+
+  const on = Object.keys(S.states).filter(k => S.states[k]);
+  const q = S.q.trim().toUpperCase();
+  const shown = rows.filter(r => {
+    if (on.length && on.indexOf(r.state) === -1) return false;
+    if (!q) return true;
+    return (r.vin + ' ' + r.loadId + ' ' + r.bay + ' ' + r.damageCodes.join(' ') + ' ' +
+            r.inspectedBy + ' ' + r.evalRequestedBy + ' ' + r.approvedBy)
+           .toUpperCase().indexOf(q) !== -1;
+  });
+
+  $('view').innerHTML = tiles + `
+    <div class="bar">
+      ${chips}
+      <input class="search" id="q" placeholder="VIN, load, bay, code, name…"
+             value="${esc(S.q)}" autocomplete="off">
+    </div>` +
+    (shown.length ? shown.map(evalRow).join('')
+                  : '<div class="empty">Nothing matches.</div>') +
+    (S.data.capped ? '<div class="foot">Showing the most recent ' +
+       (S.data.evalRows||[]).length + ' flagged units.</div>' : '') + footer();
+
+  const el = $('q');
+  if (el) el.oninput = e => {
+    S.q = e.target.value; const p = e.target.selectionStart;
+    renderEval(); const n = $('q'); n.focus(); n.setSelectionRange(p, p);
+  };
+}
+function toggleState(k) { S.states[k] = !S.states[k]; renderEval(); }
+
+function evalRow(r) {
+  const issues = []
+    .concat(r.damageText.map(t => '<div class="dmg">⚠️ ' + esc(t) + '</div>'))
+    .concat(r.docIssues.map(t => '<div class="doc">📄 ' + esc(t) + '</div>'))
+    .concat(r.note ? ['<div class="note">📝 ' + esc(r.note) + '</div>'] : []);
+
+  /* The trail is the point of this screen: who did what, and when. Each part
+     appears only when it happened, so a row never shows an empty ceremony. */
+  const trail = [];
+  if (r.inspectedBy) {
+    trail.push('<span>Inspected by <b>' + esc(r.inspectedBy) + '</b>' +
+               (r.inspectedAt ? ' · ' + esc(r.inspectedAt) : '') + '</span>');
+  }
+  if (r.evalRequestedBy) {
+    trail.push('<span>Sent to AWC by <b>' + esc(r.evalRequestedBy) + '</b>' +
+               (r.evalAtMs ? ' · <span class="age ' + ageClass(r.evalAtMs) + '">' +
+                             ago(r.evalAtMs) + '</span>' : '') + '</span>');
+  }
+  if (r.approvedBy) {
+    trail.push('<span>' +
+      (r.state === 'APPROVED_AWC' ? 'Approved after AWC by ' : 'Approved by ') +
+      '<b>' + esc(r.approvedBy) + '</b></span>');
+  }
+  if (r.threadUrl) {
+    trail.push('<a href="' + esc(r.threadUrl) + '" target="_blank">Open the email thread</a>');
+  }
+  if (r.photoCount && r.photoFolder) {
+    trail.push('<a href="' + esc(r.photoFolder) + '" target="_blank">' +
+               r.photoCount + ' photo' + (r.photoCount === 1 ? '' : 's') + '</a>');
+  }
+
+  return `
+    <div class="row">
+      <div class="r1">
+        <span class="vin">${esc(r.vin)}</span>
+        <span class="meta">${r.bay ? 'Bay ' + esc(r.bay) + ' · ' : ''}${
+          r.loadId ? 'Load ' + esc(r.loadId) : 'no load'}</span>
+        <span style="flex:1"></span>
+        <span class="st ${r.state}">${STATE_LABEL[r.state]}</span>
+      </div>
+      ${issues.length ? '<div class="issues">' + issues.join('') + '</div>' : ''}
+      ${r.emailNote ? '<div class="issues"><div class="dmg">✉️ ' +
+         esc(r.emailNote) + '</div></div>' : ''}
+      ${trail.length ? '<div class="trail">' + trail.join('') + '</div>' : ''}
+    </div>`;
+}
+
+/* ==================================================================
+   ME — one person's numbers
+   ================================================================== */
+function renderMe() {
+  const d = S.data;
+  const who = S.person || d.me;
+  const s = statsFor(who);
+  const r = range();
+
+  /* Deduped by person, not by spelling, so one person cannot appear twice. */
+  const keys = [];
+  (d.people || []).forEach(p => {
+    const k = norm(p);
+    if (k && k !== norm(d.me) && keys.indexOf(k) === -1) keys.push(k);
+  });
+  const picker = d.canSeeEveryone ? `
+    <div class="bar">
+      <label class="f">Showing</label>
+      <select id="person">
+        <option value="">${esc(d.me)} (you)</option>
+        ${keys.map(k => `<option value="${esc(k)}" ${norm(S.person)===k?'selected':''}>${
+          esc(displayName(d.people, k))}</option>`).join('')}
+      </select>
+    </div>` : '';
+
+  $('view').innerHTML = picker + `
+    <div class="tiles">
+      <div class="tile"><div class="n">${s.inspected}</div><div class="k">Inspected</div>
+        <div class="sub">${dateLabel(r)}</div></div>
+      <div class="tile warn"><div class="n">${s.flagged}</div><div class="k">With issues</div>
+        <div class="sub">of those inspected</div></div>
+      <div class="tile"><div class="n">${s.evalsSent}</div><div class="k">Evals sent</div>
+        <div class="sub">to AWC</div></div>
+      <div class="tile ${s.stillOpen ? 'bad' : 'ok'}"><div class="n">${s.stillOpen}</div>
+        <div class="k">Still open</div><div class="sub">sent, nobody has ruled</div></div>
+    </div>` +
+    (s.openRows.length ? `
+      <div class="bar"><label class="f">STILL OPEN, SENT BY ${esc(who).toUpperCase()}</label></div>
+      ${s.openRows.map(evalRow).join('')}` : '') + `
+    <div class="foot">
+      <b>"Still open" means nobody has ruled on it yet</b> — not that AWC ignored
+      it. Nothing in the system can currently tell whether AWC replied; that is
+      reply detection, which is not built. The age is the useful part.
+    </div>` + footer();
+
+  const el = $('person');
+  if (el) el.onchange = e => { S.person = e.target.value; renderMe(); };
+}
+
+function statsFor(name) {
+  const d = S.data, act = d.activity || [], k = norm(name);
+  const mine = act.filter(a => norm(a.inspectedBy) === k);
+  const evals = act.filter(a => norm(a.evalRequestedBy) === k);
+  const openRows = (d.evalRows || []).filter(r =>
+    norm(r.evalRequestedBy) === k && (r.state === 'WITH_AWC' || r.state === 'EMAIL_FAILED'));
+  return {
+    inspected: mine.length,
+    flagged: mine.filter(a => a.evalState !== 'TO_DECIDE' || a.damageCount).length,
+    evalsSent: evals.length,
+    stillOpen: openRows.length,
+    openRows: openRows.sort((a, b) => (a.evalAtMs || 0) - (b.evalAtMs || 0))
+  };
+}
+
+/* ==================================================================
+   YARD — everything that happened, over a range
+   ================================================================== */
+function renderYard() {
+  const d = S.data, act = d.activity || [];
+  const r = range();
+
+  const inspected = act.filter(a => a.inspectedAtMs);
+  const missing = act.filter(a => a.status === 'MISSING');
+  const shipped = act.filter(a => a.shippedAtMs);
+  const evals = act.filter(a => a.evalRequestedBy);
+  const approved = act.filter(a => a.evalStatus === 'APPROVED');
+  const walked = inspected.length + missing.length;
+  const miss = (walked + shipped.length)
+    ? Math.round(shipped.length * 100 / (walked + shipped.length)) : 0;
+
+  /* Per person, from the same rows — one table, so nobody has to cross-read. */
+  const by = {}, spellings = [];
+  const bump = (n, k) => {
+    const key = norm(n); if (!key) return;
+    spellings.push(n);
+    (by[key] || (by[key] = { inspected:0, evals:0, approved:0 }))[k]++;
+  };
+  inspected.forEach(a => bump(a.inspectedBy, 'inspected'));
+  evals.forEach(a => bump(a.evalRequestedBy, 'evals'));
+  approved.forEach(a => bump(a.approvedBy, 'approved'));
+  const names = Object.keys(by).sort((a,b) => by[b].inspected - by[a].inspected);
+
+  const today = ymd(Date.now());
+  $('view').innerHTML = `
+    <div class="bar">
+      <label class="f">FROM</label>
+      <input class="date" type="date" id="from" value="${S.from || today}" max="${today}">
+      <label class="f">TO</label>
+      <input class="date" type="date" id="to" value="${S.to || today}" max="${today}">
+      <button class="chip" onclick="setRange(0)">Today</button>
+      <button class="chip" onclick="setRange(6)">7 days</button>
+      <button class="chip" onclick="setRange(29)">30 days</button>
+    </div>
+
+    <div class="tiles">
+      <div class="tile"><div class="n">${inspected.length}</div><div class="k">Inspected</div>
+        <div class="sub">${dateLabel(r)}</div></div>
+      <div class="tile"><div class="n">${missing.length}</div><div class="k">Not found</div>
+        <div class="sub">walked to, not there</div></div>
+      <div class="tile ${shipped.length ? 'warn' : 'ok'}"><div class="n">${shipped.length}</div>
+        <div class="k">Shipped uninspected</div><div class="sub">${miss}% of vans handled</div></div>
+      <div class="tile"><div class="n">${evals.length}</div><div class="k">Evals sent</div>
+        <div class="sub">${approved.length} approved</div></div>
+    </div>
+
+    ${names.length ? `
+    <div class="tw"><table>
+      <tr><th>Who</th><th style="text-align:right">Inspected</th>
+          <th style="text-align:right">Evals sent</th><th style="text-align:right">Approved</th></tr>
+      ${names.map(n => `<tr><td class="name">${esc(displayName(spellings, n))}</td>
+        <td class="n">${by[n].inspected||''}</td>
+        <td class="n">${by[n].evals||''}</td>
+        <td class="n">${by[n].approved||''}</td></tr>`).join('')}
+    </table></div>`
+    : '<div class="empty">Nothing happened in this range.</div>'}
+
+    <div class="foot">
+      <b>Shipped uninspected</b> counts vans that left before anyone walked to
+      them, as a share of every van handled in the range. It is the number that
+      says how the yard is doing, not a fault of any one person — which is why
+      it is not in the table above.
+    </div>` + footer();
+
+  const f = $('from'), t = $('to');
+  const apply = () => {
+    if (!f.value || !t.value) return;
+    S.from = f.value; S.to = t.value; load();
+  };
+  f.onchange = apply; t.onchange = apply;
+}
+
+function setRange(backDays) {
+  const to = new Date(); to.setHours(0,0,0,0);
+  const from = new Date(to.getTime() - backDays * 86400000);
+  S.from = ymd(from.getTime()); S.to = ymd(to.getTime());
+  load();
+}
+
+function dateLabel(r) {
+  const a = ymd(r.from), b = ymd(r.to);
+  return a === b ? (a === ymd(Date.now()) ? 'today' : a) : a + ' → ' + b;
+}
+
+function footer() {
+  return '<div class="foot">Read-only. Nothing on this page changes anything —' +
+         ' decisions are taken in the inspection app.<br>Read ' +
+         esc(S.data.generatedAt || '') + ' · ' + (S.data.total || 0) + ' units on file.</div>';
+}
+
+load();
+</script>
+</body>
+</html>
